@@ -159,8 +159,34 @@ Sweep skills run headless on a schedule. Therefore:
   tick try again. Safety comes from operations that fail safely (plain pushes, private
   ref namespaces, detached worktrees), not from asking first.
 - Never run a command that waits on a terminal: no `$EDITOR` (`gh gist edit` without
-  `--add`, `git commit` without `-m`), no interactive prompts, no pagers. They hang the
-  run until the timeout kills it.
+  `--add`, `git commit` without `-m`/`-F`, `gh pr create` without `--title`/`--body`),
+  no interactive prompts, no pagers. They hang the run until the timeout kills it.
+
+### Preconditions for committing and pushing
+
+Cron gives you no terminal, so a missing git identity or credential helper turns into
+a failed run rather than a prompt. Check both before the first commit of a run and fix
+them yourself:
+
+```bash
+git -C <worktree> var GIT_AUTHOR_IDENT   # fails outright if no identity can be resolved
+git config --get-urlmatch credential.helper https://github.com   # empty → pushes will fail
+```
+
+- **Identity**: pass it per command with `-c`, and **never** with `git config`.
+  Worktrees share the main repository's `.git/config`, so `git -C <worktree> config
+  user.name ...` silently rewrites the user's own identity in their clone. Commits in
+  the user's name should also not inherit whatever identity a clone happens to carry
+  (it may belong to another tool), so derive it from the authenticated account:
+
+  ```bash
+  GF_NAME=$(gh api user --jq '.name // .login')
+  GF_MAIL=$(gh api user --jq 'if .email then .email else "\(.id)+\(.login)@users.noreply.github.com" end')
+  git -C <worktree> -c user.name="$GF_NAME" -c user.email="$GF_MAIL" commit -F <message-file>
+  ```
+
+- **Credentials**: if no helper is configured for github.com, run `gh auth setup-git`
+  once. It is idempotent and writes only the credential helper entry.
 - Prefer skipping over guessing: acting wrongly on a PR is worse than handling it next
   run.
 - Time-box: if a single item takes disproportionately long (large repo clone, huge

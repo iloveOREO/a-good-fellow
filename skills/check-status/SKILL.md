@@ -12,6 +12,11 @@ Read-only health check of the good-fellow automation. Read `docs/conventions.md`
 put in front of the user; only act after they say so. The one exception is reading
 logs and process state, which is always safe.
 
+This skill is diagnostic, so unlike the sweeps it may ask questions — but it must never
+*block* on one. If it is running with no user present (e.g. someone added it to a
+schedule), print the findings and the recommended commands and exit; do not wait, and
+do not remediate on your own.
+
 Lead the report with a one-line verdict — healthy / running now / degraded / not
 running at all — then the supporting detail.
 

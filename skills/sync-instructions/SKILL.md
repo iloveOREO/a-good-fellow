@@ -11,6 +11,11 @@ skill reads (conventions §1).
 
 Read `docs/conventions.md` (repo root of this skill) first.
 
+**Interactive skill — not part of the scheduled sweep.** Authoring instructions and
+resolving a local/remote conflict need the user's judgement, so this skill is allowed
+to ask. Never wire it into the cron runner; the unattended sweeps only *read* the
+cache (conventions §1).
+
 ## Two footguns to avoid
 
 - **Never run bare `gh gist edit <id>`.** It opens `$EDITOR` and blocks forever in an

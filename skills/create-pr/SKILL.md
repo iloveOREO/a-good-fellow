@@ -36,6 +36,18 @@ Group the changes into one commit (or a few logical ones) with a message in the
 repository's existing style (`git log --oneline -15` to sample). Subject line explains
 *why*, not just *what*. Commit only files related to the task.
 
+This skill runs unattended, so satisfy the commit preconditions in conventions §6
+first (identity resolvable, credential helper present) and **never invoke an editor** —
+pass the message on the command line or from a file:
+
+```bash
+git -C <worktree> add <specific paths>
+git -C <worktree> -c user.name="$GF_NAME" -c user.email="$GF_MAIL" commit -F <message-file>
+```
+
+Never a bare `git commit` (opens an editor) and never `git config` inside a worktree
+(it rewrites the user's shared `.git/config`) — see conventions §6.
+
 ## 4. Push and open the PR
 
 ```bash
