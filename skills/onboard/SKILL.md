@@ -101,6 +101,9 @@ expires, restart the login and relay the fresh code.
 
 ## Step 3 — Personal instruction gist
 
+(Once onboarding is done, the **sync-instructions** skill handles this file from then
+on — pulling, editing, and pushing it back. The steps here are the first-time setup.)
+
 Look for the gist:
 
 ```bash

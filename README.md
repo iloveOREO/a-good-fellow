@@ -30,6 +30,22 @@ Your standing preferences (language, tone, review taste, repo scope) live in a
 personal gist file `good-fellow-instruction.md`, cached at
 `~/.good-fellow/instruction.md` and applied to every task.
 
+## Keeping an eye on it
+
+Two skills are for you rather than for the schedule — run them any time:
+
+- **`/check-status`** — is a sweep running right now, is the cron job actually
+  firing, what did the recent runs do, and why did any of them fail. It reads the
+  lock, the crontab, and `~/.good-fellow/logs/`, then names the specific fix for
+  what it finds: a stuck lock holding up every tick, expired Claude or GitHub
+  credentials, runs hitting the time limit, cron not firing at all (on macOS,
+  usually Full Disk Access), or a runner generated before a fix landed. It only
+  reports — it won't change anything without asking.
+- **`/sync-instructions`** — pull the instruction gist into the local cache, or edit
+  your instructions and push them back. It diffs before overwriting either side, so
+  a local edit is never silently lost, and it creates the gist if you don't have one
+  yet.
+
 ## Install
 
 There is deliberately **no install script** — the repo is just skills and docs, and
@@ -136,8 +152,9 @@ cache, worktrees, logs, lock, generated runner, optional env file) lives in
 
 ## Manual use
 
-Each skill also works standalone in an interactive session: `/process-prs`,
-`/fix-assigned-issues`, `/create-pr`, etc. After onboarding, a one-off full sweep:
+Each skill also works standalone in an interactive session: `/check-status`,
+`/sync-instructions`, `/process-prs`, `/fix-assigned-issues`, `/create-pr`, and so
+on. After onboarding, a one-off full sweep:
 
 ```bash
 ~/.good-fellow/run-good-fellow.sh

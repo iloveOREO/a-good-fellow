@@ -19,6 +19,13 @@ Skills (each in `skills/<name>/SKILL.md`):
 - `create-pr` — commit + push + open a PR from a working tree with changes.
 - `process-prs` — fix feedback on the user's PRs; review others' PRs (critical
   issues only, `LGTM` otherwise, approve when clean and review was requested).
+- `check-status` — read-only health check: is a sweep running, is cron firing, what
+  did recent runs do, and what specifically to fix when they didn't.
+- `sync-instructions` — pull the instruction gist to the local cache, or edit and
+  push it back; diffs before overwriting either side.
+
+Only `onboard` and `sync-instructions` change the user's instructions or machine
+setup; `check-status` never changes anything without asking.
 
 The scheduled entry point is `~/.good-fellow/run-good-fellow.sh` (cron, every 30
 minutes) — generated per-machine by the onboard skill from the reference

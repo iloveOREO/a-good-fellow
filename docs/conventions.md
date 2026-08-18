@@ -19,7 +19,8 @@ review taste, and anything else the user cares about. Apply it to **every** GitH
   ```
 
 - If no gist exists and you are running unattended, proceed with defaults and note it in
-  the run log. Only the `onboard` skill may prompt the user to create one.
+  the run log. Only the `onboard` and `sync-instructions` skills may prompt the user to
+  create or change one; use `sync-instructions` for any interactive pull/edit/push.
 - **Language**: use the language the gist specifies. If it is silent, match the language
   of the thread you are replying to.
 
