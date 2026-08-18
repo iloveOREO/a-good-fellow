@@ -1,0 +1,59 @@
+---
+name: create-pr
+description: Turn uncommitted changes in a working tree into a pull request - review the diff for bugs, write a clear commit, push the branch, and open a GitHub PR with a well-structured body and the good-fellow marker. Use when the user asks to create a PR, commit and open a pull request, or when another good-fellow skill has a finished fix to ship.
+---
+
+# Create PR
+
+Helper skill: takes a working tree (usually a good-fellow worktree) with changes and
+ships them as a PR. Read `docs/conventions.md` (repo root of this skill) and
+`~/.good-fellow/instruction.md` first.
+
+Inputs: the working tree path (default: current directory), and optionally the issue
+number the change fixes.
+
+## 1. Pre-flight
+
+```bash
+git status --porcelain
+git branch --show-current
+```
+
+- Refuse to run on the repo's default branch or on a branch the user checked out in
+  their own working tree — this skill only ships branches created per conventions §3
+  (`good-fellow/*`) or the user's explicit current branch when invoked manually.
+- Refuse if there are no changes.
+
+## 2. Self-review the diff
+
+Read the full `git diff` (plus untracked files). Check for: debug leftovers,
+accidental file inclusions (lockfiles, secrets, editor junk), broken imports, logic
+errors. Fix what you find. If a secret is staged, stop and report — never push it.
+
+## 3. Commit
+
+Group the changes into one commit (or a few logical ones) with a message in the
+repository's existing style (`git log --oneline -15` to sample). Subject line explains
+*why*, not just *what*. Commit only files related to the task.
+
+## 4. Push and open the PR
+
+```bash
+git push -u origin <branch>
+gh pr create --title "<title>" --body-file <tmpfile> --base <default-branch>
+```
+
+Body structure (language per gist / repo norms):
+
+- What & why — one short paragraph.
+- Key changes — brief bullet list.
+- How it was verified — tests run, or honest "not tested" note.
+- `Fixes #<n>` when an issue number was given.
+- The marker line: `<!-- good-fellow:v1 -->`.
+
+No boilerplate beyond that; do not enable auto-merge; do not request reviewers unless
+the gist says to.
+
+## 5. Report
+
+Return the PR URL and the commit SHA(s).
