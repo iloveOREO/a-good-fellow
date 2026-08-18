@@ -15,7 +15,38 @@ real location (`SKILL.md` may be reached through a symlink — follow it). Every
 below must work for **any user on macOS or Linux**: derive paths from `$HOME`, never
 assume a username, and prefer commands available in both GNU and BSD userlands.
 
-## Step 0 — State directory
+## Step 0 — Tell the user what will be touched, then create the state directory
+
+Onboarding writes **outside the repository**, and most agents restrict that: the
+`Write`/`Edit` tools typically refuse absolute paths outside the working directory,
+which mid-flow shows up as a blocked write and a permission dialog. Two rules avoid
+that entirely:
+
+- **Never use the `Write`/`Edit` tools for anything outside `<REPO_ROOT>`.** Create
+  out-of-tree files with a single `Bash` heredoc instead (`cat > file <<'EOF'`).
+  Bash is governed by command permissions rather than the workspace path check, so
+  one approval covers the whole write.
+- **Ask once, up front.** Before touching anything, list every out-of-tree path this
+  skill will create or modify, so the user grants access knowingly instead of being
+  interrupted later:
+
+  | Path | Why |
+  |---|---|
+  | `~/.good-fellow/` | state: instruction cache, logs, worktrees, generated runner |
+  | `~/.claude/skills/`, `~/.codex/skills/`, `~/.cursor/skills/` | skill symlinks (only for agents that exist) |
+  | the user's crontab | the 30-minute schedule |
+
+  Mention that they can pre-authorize instead of approving each step — in Claude
+  Code, starting the session with `claude --add-dir ~/.good-fellow` (after Step 0
+  creates it) or approving the first Bash write covers the rest.
+
+If a write is denied anyway, **do not stop and do not leave setup half-finished**:
+print the exact command block for the user to paste into their own shell, ask them to
+confirm when done, then verify the result yourself (`test -x`, `crontab -l`) and carry
+on with the remaining steps.
+
+Create the state directory now — this is also the first approval prompt, so say what
+it is for:
 
 ```bash
 mkdir -p ~/.good-fellow/logs ~/.good-fellow/worktrees
@@ -85,11 +116,19 @@ gh api /gists --paginate --jq '.[] | select(.files["good-fellow-instruction.md"]
 
 - **Not found**: explain that this file holds their standing instructions (reply
   language, review taste, repos to prioritize/skip, tone) applied to every GitHub
-  task. Ask them to dictate the content now. Write it to
-  `~/.good-fellow/instruction.md`, show it back for confirmation, then upload it as a
-  secret gist so future machines can reuse it. The filename inside the gist must be
-  exactly `good-fellow-instruction.md` (gist filenames come from the local file name,
-  so create it from a copy with that name):
+  task. Ask them to dictate the content now, then save it with a heredoc — **not the
+  `Write` tool**, which would be blocked outside the repo (Step 0):
+
+  ```bash
+  cat > ~/.good-fellow/instruction.md <<'EOF'
+  <the user's instructions>
+  EOF
+  ```
+
+  Show it back for confirmation, then upload it as a secret gist so future machines
+  can reuse it. The filename inside the gist must be exactly
+  `good-fellow-instruction.md` (gist filenames come from the local file name, so
+  create it from a copy with that name):
 
   ```bash
   cp ~/.good-fellow/instruction.md /tmp/good-fellow-instruction.md
@@ -106,17 +145,42 @@ The scheduled job needs an agent CLI that runs without a human. Check, in order
 2. `codex`: usable if `~/.codex/auth.json` exists.
 3. `cursor-agent`: usable if installed and `cursor-agent status` shows a login.
 
-If none is usable, tell the user to either run `claude setup-token` and put the
-output in `~/.good-fellow/env` as `CLAUDE_CODE_OAUTH_TOKEN=...` (chmod 600), or log
-in with codex / cursor-agent — and pause until one is done. Do not install a
-scheduled job that can never run.
+If none is usable, ask the user to fix it and pause until they have. Have them run
+these **themselves** rather than pasting the token to you — it is a long-lived
+credential, and this keeps it out of the transcript:
+
+```bash
+claude setup-token
+umask 077 && printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' '<token>' >> ~/.good-fellow/env
+```
+
+Alternatively they can log in with codex or cursor-agent. Verify afterwards without
+printing the secret (`test -s ~/.good-fellow/env`, `grep -c CLAUDE_CODE_OAUTH_TOKEN
+~/.good-fellow/env`). Do not install a scheduled job that can never run.
 
 ## Step 5 — Generate the runner script
 
-Cron needs a file to invoke, so generate one at `~/.good-fellow/run-good-fellow.sh`
-(`chmod +x`). Do not copy it from anywhere — write it from the reference below,
-adjusting for what you learned in Steps 1–4 (e.g. hardcode the detected
-`<REPO_ROOT>`). Requirements the generated script must satisfy:
+Cron needs a file to invoke, so generate one at `~/.good-fellow/run-good-fellow.sh`.
+Do not copy it from anywhere — write it from the reference below, adjusting for what
+you learned in Steps 1–4 (e.g. hardcode the detected `<REPO_ROOT>`).
+
+**Write it with a single Bash heredoc, never the `Write` tool** (Step 0): the target
+is outside the repo, so `Write` gets blocked and interrupts onboarding. Use a
+**quoted** delimiter so the runner's own `$HOME`, `$STATUS`, `$PROMPT` etc. are
+written literally instead of being expanded now, and combine the write with `chmod`
+so one approval finishes the step:
+
+```bash
+cat > ~/.good-fellow/run-good-fellow.sh <<'GOOD_FELLOW_RUNNER_EOF'
+<the full runner script>
+GOOD_FELLOW_RUNNER_EOF
+chmod +x ~/.good-fellow/run-good-fellow.sh
+```
+
+Then verify it before relying on it: `bash -n ~/.good-fellow/run-good-fellow.sh`
+(syntax) and `test -x ~/.good-fellow/run-good-fellow.sh` (executable).
+
+Requirements the generated script must satisfy:
 
 - **Portability**: runs on macOS's default bash 3.2 and BSD userland as well as
   Linux. No `flock` on macOS → fall back to an atomic `mkdir` lock. No GNU `timeout`
@@ -139,6 +203,10 @@ adjusting for what you learned in Steps 1–4 (e.g. hardcode the detected
   `/opt/homebrew/bin`, `/usr/local/bin`, and the system dirs.
 - **Auth checks**: `gh auth status` must pass; agent CLI auto-detect in the order
   claude → codex → cursor-agent (overridable via `GOOD_FELLOW_AGENT`).
+- **Workspace access**: the sweeps clone into `~/<repo>` and use
+  `~/.good-fellow/worktrees/`, both outside the runner's working directory. Grant
+  access explicitly (`claude --add-dir "$HOME"`), otherwise those writes are blocked
+  with nobody present to approve them and the run fails silently.
 - **Claude invocation**: do NOT use `--dangerously-skip-permissions` (claude refuses
   it when running as root); pre-authorize tools with `--allowedTools` instead.
 - **Timeout**: default 1500s so a run always ends before the next 30-minute tick.
@@ -230,9 +298,12 @@ command -v timeout  >/dev/null 2>&1 && TIMEOUT_CMD="timeout --kill-after=30 $MAX
 command -v gtimeout >/dev/null 2>&1 && [ -z "$TIMEOUT_CMD" ] && TIMEOUT_CMD="gtimeout --kill-after=30 $MAX_RUNTIME"
 
 # 9>&- everywhere: the agent (and anything it leaks) must never inherit the lock fd.
+# --add-dir "$HOME": sweeps clone into ~/<repo> and work in ~/.good-fellow/worktrees,
+# both outside REPO_DIR; without it those writes are blocked and nobody is present to
+# approve them, so the run would fail silently.
 cd "$REPO_DIR"; STATUS=0
 case "$AGENT" in
-  claude) $TIMEOUT_CMD claude -p "$PROMPT" \
+  claude) $TIMEOUT_CMD claude -p "$PROMPT" --add-dir "$HOME" \
             --allowedTools Bash Read Grep Glob Write Edit MultiEdit Skill TodoWrite 9>&- || STATUS=$? ;;
   codex)  $TIMEOUT_CMD codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT" 9>&- || STATUS=$? ;;
   cursor) $TIMEOUT_CMD cursor-agent --print --force "$PROMPT" 9>&- || STATUS=$? ;;
@@ -264,6 +335,14 @@ top-of-hour cron rush and other jobs on the machine. If the crontab lacks
 (`echo $PATH`, `echo $HOME`) so `gh` and the agent CLI resolve — on macOS that must
 include the Homebrew bin dir (`/opt/homebrew/bin` on Apple Silicon, `/usr/local/bin`
 on Intel).
+
+Install it in one command so it is a single approval and never leaves the crontab
+half-written (`crontab -` replaces the whole table, so always start from the current
+one):
+
+```bash
+{ crontab -l 2>/dev/null; echo '7,37 * * * * <expanded command line>'; } | crontab -
+```
 
 Verify with `crontab -l` after writing.
 
