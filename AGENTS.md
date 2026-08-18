@@ -20,4 +20,6 @@ Skills (each in `skills/<name>/SKILL.md`):
 - `process-prs` — fix feedback on the user's PRs; review others' PRs (critical
   issues only, `LGTM` otherwise, approve when clean and review was requested).
 
-The scheduled entry point is `scripts/run-good-fellow.sh` (cron, every 30 minutes).
+The scheduled entry point is `~/.good-fellow/run-good-fellow.sh` (cron, every 30
+minutes) — generated per-machine by the onboard skill from the reference
+implementation embedded in `skills/onboard/SKILL.md`; it is not versioned here.
