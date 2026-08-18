@@ -40,8 +40,22 @@ same repo. Never touch the user's checked-out branch.
 Create the branch from the repo's default branch tip:
 
 ```bash
-git worktree add ~/.good-fellow/worktrees/<repo>-issue-<n> -b good-fellow/issue-<n> origin/<default>
+git -C ~/<repo> worktree add ~/.good-fellow/worktrees/<repo>-issue-<n> -b good-fellow/issue-<n> origin/<default>
 ```
+
+Nobody is available to unblock this, so recover from leftovers yourself. If the path
+already exists or the branch is left over from a crashed run, clear both and retry
+once — the branch lives in our own `good-fellow/` namespace, so removing it can never
+touch the user's work:
+
+```bash
+git -C ~/<repo> worktree remove --force ~/.good-fellow/worktrees/<repo>-issue-<n>
+git -C ~/<repo> worktree prune
+git -C ~/<repo> branch -D good-fellow/issue-<n>
+```
+
+Never resolve a collision by checking out an existing branch by name in the user's
+working tree (conventions §3).
 
 ## 4. Implement the fix
 

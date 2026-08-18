@@ -74,6 +74,53 @@ Against a user-owned main working tree, the only allowed write operations are
 Remove your worktree (`git worktree remove --force` + `git worktree prune`) when a task
 finishes successfully; leave it in place after a failure so state can be inspected.
 
+### Never check out a branch by name — it collides with the user's checkout
+
+A branch can only be checked out in one worktree at a time, so
+`git worktree add <path> <branch>` **fails outright** when the user already has that
+branch open:
+
+```
+fatal: 'feature/x' is already used by worktree at '/root/a2e'
+```
+
+This is not an edge case: the branch behind a PR you are asked to fix is frequently
+the branch the user is working on right now. Handle it without any human involvement —
+fetch the code into a **private ref namespace** and check it out **detached**, which
+works no matter what is checked out anywhere else and can never collide with a user
+branch name:
+
+```bash
+git -C ~/<repo> fetch origin "pull/<N>/head:refs/good-fellow/pr-<N>" --force
+git -C ~/<repo> worktree add --detach ~/.good-fellow/worktrees/<repo>-pr-<N> refs/good-fellow/pr-<N>
+```
+
+If `worktree add` fails because a previous run left that path behind, recover on your
+own — `git -C ~/<repo> worktree remove --force <path>; git -C ~/<repo> worktree prune`
+— then retry. Never fall back to checking the branch out by name.
+
+Clean up on success: remove the worktree, then `git -C ~/<repo> update-ref -d
+refs/good-fellow/pr-<N>` so the namespace does not accumulate.
+
+### Pushing to a branch the user may be editing
+
+Publish work from the detached worktree by pushing HEAD at the branch explicitly:
+
+```bash
+git -C <worktree> push origin HEAD:refs/heads/<headRefName>
+```
+
+- **Never force-push, and never `--force-with-lease`.** A plain push is refused when
+  the branch has moved, which is exactly the protection needed: the user's commits can
+  never be overwritten.
+- If the push is rejected as non-fast-forward, someone advanced the branch while you
+  worked. Re-fetch, rebase your commit onto the new tip, and retry **once**. If it
+  fails again or the rebase conflicts, abandon the push, leave nothing half-applied,
+  and let the next scheduled run start over. Do not ask anyone what to do.
+- After a successful push, say so in the reply you post, including the commit SHA —
+  the user may have the branch checked out locally and will need to pull. Making the
+  action visible afterwards is the substitute for asking permission first.
+
 Branch naming: `good-fellow/issue-<n>` for issue fixes, `good-fellow/<short-slug>`
 otherwise. Never commit to a branch you did not create, except pushing fixes to the
 head branch of the **user's own** PR.
@@ -105,8 +152,15 @@ Before acting on any PR, issue, thread, or discussion:
 
 Sweep skills run headless on a schedule. Therefore:
 
-- Never wait for user input; if a task genuinely needs the user, leave it untouched and
-  note it in the run output.
+- Never wait for user input, and never resolve a difficulty by handing it back to the
+  user ("please make this change yourself") — a scheduled job that needs a human to
+  finish is a scheduled job that does nothing. Every obstacle must have a rule you can
+  apply on your own: recover from leftover state, retry once, or skip and let the next
+  tick try again. Safety comes from operations that fail safely (plain pushes, private
+  ref namespaces, detached worktrees), not from asking first.
+- Never run a command that waits on a terminal: no `$EDITOR` (`gh gist edit` without
+  `--add`, `git commit` without `-m`), no interactive prompts, no pagers. They hang the
+  run until the timeout kills it.
 - Prefer skipping over guessing: acting wrongly on a PR is worse than handling it next
   run.
 - Time-box: if a single item takes disproportionately long (large repo clone, huge
