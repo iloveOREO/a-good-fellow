@@ -283,3 +283,8 @@ GOOD_FELLOW_DRY_RUN=1 ~/.good-fellow/run-good-fellow.sh
 Then report: agents the skills were installed for, gh account, gist status
 (found/created + id), which agent CLI the runner will use, the cron schedule, and
 where logs land (`~/.good-fellow/logs/`).
+
+Finally, tell the user to **restart their agent session**: agents build their skill
+list at startup, so the session that just ran onboarding (and any other session that
+was already open) will not recognize `/onboard`, `/process-prs`, or the other slash
+commands until it is restarted.

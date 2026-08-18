@@ -57,9 +57,11 @@ Then, in the session:
 
 > Run the onboard skill in skills/onboard/SKILL.md
 
-Once it finishes, the skills are symlinked into `~/.claude/skills/`, so every later
-session can just use the slash commands: `/onboard`, `/process-prs`,
-`/fix-assigned-issues`, and so on.
+Once it finishes, the skills are symlinked into `~/.claude/skills/`. **Restart the
+CLI** — a session that was already running when the skills were installed does not
+know about them, so `/onboard` will come back as an unrecognized command. After the
+restart the slash commands work: `/onboard`, `/process-prs`, `/fix-assigned-issues`,
+and so on.
 
 ### Onboard with Codex
 
@@ -72,9 +74,9 @@ Then, in the session:
 > Run the onboard skill in skills/onboard/SKILL.md
 
 Codex will ask for approval before writing files and editing the crontab — accept
-those steps. Afterwards the skills live in `~/.codex/skills/`, and this repo's
-[AGENTS.md](AGENTS.md) tells Codex which skill to use for what whenever you work
-inside the repo.
+those steps. Afterwards the skills live in `~/.codex/skills/`; restart the session so
+they are picked up. This repo's [AGENTS.md](AGENTS.md) also tells Codex which skill to
+use for what whenever you work inside the repo.
 
 ### Onboard with Cursor or another agent
 
