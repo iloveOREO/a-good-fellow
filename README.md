@@ -33,25 +33,78 @@ personal gist file `good-fellow-instruction.md`, cached at
 ## Install
 
 There is deliberately **no install script** — the repo is just skills and docs, and
-your agent does the setup itself. Clone the repo, then point your agent at the
-onboard skill:
+your agent does the setup itself. Clone it anywhere, then run the onboard skill from
+whichever agent you use.
+
+```bash
+git clone <this-repo> ~/a-good-fellow
+cd ~/a-good-fellow
+```
+
+Onboarding is **interactive by design** — it may show you a GitHub device-login code
+to enter on your phone, and ask you to dictate your standing instructions — so run it
+in an interactive session, not a headless one. The agent will need to create symlinks,
+write `~/.good-fellow/run-good-fellow.sh`, and edit your crontab; approve those when
+prompted.
+
+### Onboard with Claude Code
+
+```bash
+claude
+```
+
+Then, in the session:
 
 > Run the onboard skill in skills/onboard/SKILL.md
 
-(Once installed, it's also available as `/onboard`.) Following that skill, the agent
-will:
+Once it finishes, the skills are symlinked into `~/.claude/skills/`, so every later
+session can just use the slash commands: `/onboard`, `/process-prs`,
+`/fix-assigned-issues`, and so on.
 
-- symlink the skills into the skill directory of every agent installed on the
+### Onboard with Codex
+
+```bash
+codex
+```
+
+Then, in the session:
+
+> Run the onboard skill in skills/onboard/SKILL.md
+
+Codex will ask for approval before writing files and editing the crontab — accept
+those steps. Afterwards the skills live in `~/.codex/skills/`, and this repo's
+[AGENTS.md](AGENTS.md) tells Codex which skill to use for what whenever you work
+inside the repo.
+
+### Onboard with Cursor or another agent
+
+Any agent that reads `SKILL.md` folders works the same way — open the agent in the
+repo directory and give it the same instruction:
+
+> Run the onboard skill in skills/onboard/SKILL.md
+
+The skill auto-detects installed agents by their home directories (`~/.claude`,
+`~/.codex`, `~/.cursor`) and installs into each one's `skills/` directory; tell it
+about any other agent you use and it will install there too.
+
+### What onboarding actually does
+
+- symlinks the skills into the skill directory of every agent installed on the
   machine (`~/.claude/skills/`, `~/.codex/skills/`, `~/.cursor/skills/`, ...);
-- check `gh auth status`, and if needed walk you through the device-code login
+- checks `gh auth status`, and if needed walks you through the device-code login
   (built for remote machines: it shows you the URL + one-time code and waits);
-- find your `good-fellow-instruction.md` gist, or help you write and upload one;
-- verify a headless agent CLI is authenticated (claude via
-  `~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` in `~/.good-fellow/env`;
-  codex via `~/.codex/auth.json`; or cursor-agent);
-- generate the cron runner at `~/.good-fellow/run-good-fellow.sh` from the reference
-  implementation embedded in the skill, and install the 30-minute cron job (on
+- finds your `good-fellow-instruction.md` gist, or helps you write and upload one;
+- verifies a headless agent CLI is authenticated for the scheduled runs — claude via
+  `~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` in `~/.good-fellow/env`
+  (from `claude setup-token`); codex via `~/.codex/auth.json` (from `codex login`);
+  or cursor-agent;
+- generates the cron runner at `~/.good-fellow/run-good-fellow.sh` from the reference
+  implementation embedded in the skill, and installs the 30-minute cron job (on
   macOS, cron may need Full Disk Access for scheduled runs).
+
+The agent that onboards you and the agent that runs the sweeps need not be the same:
+the runner auto-detects claude → codex → cursor-agent at each tick, and
+`GOOD_FELLOW_AGENT=codex` in `~/.good-fellow/env` pins it to one.
 
 ## Layout
 
