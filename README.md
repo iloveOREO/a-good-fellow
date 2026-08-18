@@ -2,8 +2,12 @@
 
 Agent-agnostic skills that discuss, review, and fix GitHub PRs and issues on your
 behalf. The skills are plain [SKILL.md](https://agentskills.io) folders, so they work
-in Claude Code, Codex, and any agent that reads the same format; a cron job runs them
-headlessly every 30 minutes.
+in Claude Code, Codex, Cursor, and any agent that reads the same format; a cron job
+runs them headlessly every 30 minutes.
+
+Works for any user on macOS and Linux: no hardcoded usernames or paths (everything
+lives under your `$HOME`), and the scripts run on stock macOS bash 3.2 / BSD userland
+as well as GNU/Linux.
 
 ## What it does, every 30 minutes
 
@@ -28,31 +32,38 @@ personal gist file `good-fellow-instruction.md`, cached at
 
 ## Install
 
-```bash
-./install.sh
-```
+There is deliberately **no install script** — the repo is just skills and docs, and
+your agent does the setup itself. Clone the repo, then point your agent at the
+onboard skill:
 
-symlinks the skills into `~/.claude/skills/` and `~/.codex/skills/`. Then run the
-**onboard** skill from your agent (`/onboard` in Claude Code). It will:
+> Run the onboard skill in skills/onboard/SKILL.md
 
+(Once installed, it's also available as `/onboard`.) Following that skill, the agent
+will:
+
+- symlink the skills into the skill directory of every agent installed on the
+  machine (`~/.claude/skills/`, `~/.codex/skills/`, `~/.cursor/skills/`, ...);
 - check `gh auth status`, and if needed walk you through the device-code login
   (built for remote machines: it shows you the URL + one-time code and waits);
 - find your `good-fellow-instruction.md` gist, or help you write and upload one;
 - verify a headless agent CLI is authenticated (claude via
   `~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` in `~/.good-fellow/env`;
-  codex via `~/.codex/auth.json`);
-- install the 30-minute cron job running `scripts/run-good-fellow.sh`.
+  codex via `~/.codex/auth.json`; or cursor-agent);
+- generate the cron runner at `~/.good-fellow/run-good-fellow.sh` from the reference
+  implementation embedded in the skill, and install the 30-minute cron job (on
+  macOS, cron may need Full Disk Access for scheduled runs).
 
 ## Layout
 
 ```
-skills/            one folder per skill (SKILL.md format, agent-agnostic)
+skills/              one folder per skill (SKILL.md format, agent-agnostic)
 docs/conventions.md  shared rules: gist instructions, untrusted-input boundary,
                      worktree isolation, bot marker, idempotence
-scripts/run-good-fellow.sh  cron entry point: lock, auth, CLI auto-detect, timeout
 ```
 
-Runtime state (instruction cache, worktrees, logs, lock, optional env file) lives in
+Anything that must exist as a file on a machine (the cron runner) is generated
+per-machine by the onboard skill, not versioned here. Runtime state (instruction
+cache, worktrees, logs, lock, generated runner, optional env file) lives in
 `~/.good-fellow/`, outside this repo.
 
 ## Safety properties
@@ -71,10 +82,10 @@ Runtime state (instruction cache, worktrees, logs, lock, optional env file) live
 ## Manual use
 
 Each skill also works standalone in an interactive session: `/process-prs`,
-`/fix-assigned-issues`, `/create-pr`, etc. A one-off full sweep:
+`/fix-assigned-issues`, `/create-pr`, etc. After onboarding, a one-off full sweep:
 
 ```bash
-scripts/run-good-fellow.sh
+~/.good-fellow/run-good-fellow.sh
 ```
 
-Dry run (auth/lock/CLI checks only): `GOOD_FELLOW_DRY_RUN=1 scripts/run-good-fellow.sh`
+Dry run (auth/lock/CLI checks only): `GOOD_FELLOW_DRY_RUN=1 ~/.good-fellow/run-good-fellow.sh`

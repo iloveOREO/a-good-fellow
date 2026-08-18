@@ -11,7 +11,8 @@ GitHub task.
 
 Skills (each in `skills/<name>/SKILL.md`):
 
-- `onboard` — interactive setup: gh login, instruction gist, headless auth, cron job.
+- `onboard` — interactive setup: skill installation, gh login, instruction gist,
+  headless auth, generated cron runner. Start here on a fresh machine.
 - `reply-notifications` — sweep unread notifications, reply where warranted.
 - `join-discussions` — reply to Discussions that @mention the user.
 - `fix-assigned-issues` — fix assigned issues and open PRs.

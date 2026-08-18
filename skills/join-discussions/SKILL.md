@@ -24,8 +24,11 @@ Supplement with search (catches mentions whose notification was already read):
 ```bash
 gh api graphql -f query='query($q: String!) { search(query: $q, type: DISCUSSION, first: 20) {
   nodes { ... on Discussion { number title url repository { nameWithOwner } updatedAt } } } }' \
-  -f q="mentions:$LOGIN updated:>=$(date -d '7 days ago' +%Y-%m-%d)"
+  -f q="mentions:$LOGIN updated:>=$SINCE"
 ```
+
+where `SINCE` is the date 7 days ago in `YYYY-MM-DD` — GNU/Linux:
+`date -d '7 days ago' +%Y-%m-%d`; BSD/macOS: `date -v-7d +%Y-%m-%d`.
 
 ## 2. Read the whole thread
 
