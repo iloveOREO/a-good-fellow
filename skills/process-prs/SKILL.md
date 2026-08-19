@@ -1,6 +1,6 @@
 ---
 name: process-prs
-description: Sweep open PRs involving the user through a persistent serial queue, resuming HEAD/state-bound review handoffs without repeating completed evidence or bulk-deferring the tail. On the user's own PRs, fix failing Actions and actionable feedback; on others' PRs, read the complete ledger and affected paths, fail closed on incomplete/stale evidence, comment critical issues or a concrete clean rationale, and approve only a requested clean review. Use for scheduled PR sweeps or requests to process, review, or babysit open pull requests.
+description: Sweep open PRs involving the user through a persistent serial queue, resuming HEAD/state-bound review handoffs without repeating completed evidence or bulk-deferring the tail. On the user's own PRs, fix failing Actions and actionable feedback; on others' PRs, read the complete ledger and affected paths, fail closed on incomplete/stale evidence, leave a visible HEAD-bound outcome even when external gates block approval, and approve only a requested clean review. Use for scheduled PR sweeps or requests to process, review, or babysit open pull requests.
 ---
 
 # Process PRs
@@ -63,14 +63,16 @@ PRs or the old cursor; only after it completes does normal round-robin order res
 | draft | clear handoff; advance without receipt |
 | ready, waiting-author, confirmed comment/approval, or completed own-PR handling | clear handoff; record the matching receipt; advance |
 | own PR or already-covered code whose only remaining gate is CI | record `ci-waiting`; advance |
-| completed `reviewed` work with CI pending/unknown | save/retain `reviewed`; record `ci-waiting`; advance without clearing it |
+| completed clean `reviewed` work blocked only by pending/unknown CI or unresolved/conflicting mergeability | submit one visible gate-waiting comment; after a confirmed post clear the handoff, record `ci-waiting`, and advance |
 | fresh state no longer matches a handoff/review decision | clear handoff; recapture and restart this PR; do not advance |
 | review is partially complete | save `reviewing`; clean up; do not advance; break |
 | review is complete but remaining time prevents submission | save `reviewed`; clean up; do not advance; break |
 | insufficient time to start the next deep item | do not save an empty handoff, receipt, or cursor; break |
 
 Where the table says clear, run `"$HANDOFF_TOOL" clear "$OWNER" "$REPO" "$NUMBER"`
-before recording/advancing; never clear the pending-CI `reviewed` exception.
+before recording/advancing. Retain a completed `reviewed` handoff only until its
+guarded outcome is confirmed, or when time/freshness/network safety prevents a
+submission attempt; an external gate alone never justifies a silent handoff.
 
 For a covered result, capture `COVERAGE_STATE` after its last mutation. For every exact
 `REPO_URL` + `$REPO_URL/pulls/$NUMBER` notification match, observe the unread version,
@@ -105,9 +107,12 @@ the same check passes. Once deep work starts, do not rush it because the queue i
 save a real partial handoff if time unexpectedly runs short. Subagents may inspect only
 the current PR; the parent is the sole GitHub writer and finalizes it before moving on.
 Because `reviewing` holds the cursor and breaks, never create a second `reviewing`
-handoff. Multiple completed `reviewed` handoffs may wait across queue rotations.
+handoff. Completed `reviewed` handoffs may wait across queue rotations only when a
+guarded submission could not safely be attempted or confirmed; pending CI or a merge
+conflict must instead receive the visible gate-waiting outcome below.
 Never use `ci-waiting` to bypass the first code review of someone else's PR: review
-it for concerns, save completed evidence, then wait for CI only before a clean result.
+it for concerns and save completed evidence first. When that review is clean but an
+external gate remains, leave the gate-waiting marker before advancing.
 During deep work, recheck the clock after each changed file, behavior path, or test and
 before any command likely to run for a minute. When `review_cutoff > 0` and 90 seconds
 or less remain, stop at that safe checkpoint and persist the real handoff; do not rush
@@ -173,10 +178,17 @@ fall back to a smaller query. Read its full ledger before any decision.
 Before loading a handoff, inspect every authenticated-user current-HEAD review/comment;
 foreign, edited, or minimized markers never count. A clean marker wins only when its
 reviewed SHA/base/token match, CI and threads are clean, no direct request remains, and
-an `action=approve` review still is approved and undismissed. A concern/waiting marker
-wins only while its current-head token and unresolved concern still match. Clear the
-handoff and finalize either handled state. New external feedback or re-request
-invalidates old clean state.
+an `action=approve` review still is approved and undismissed. A concern marker wins
+only while its current-head token and unresolved concern still match.
+
+A **gate-waiting marker** is an authenticated current-HEAD `verdict=waiting` comment
+whose body explicitly says the code review is complete, reports no blocking code
+finding, and names only a live CI or mergeability gate. It wins while its reviewed
+SHA/base/token match and that gate remains, so clear any duplicate handoff, finalize
+`ci-waiting`, and advance without another comment or code review. If the gate becomes
+clean while HEAD/base/token still match, treat the marker as exact-HEAD code coverage
+and route only the live approval/comment predicates; do not reread the diff. New
+external feedback or a marker state mismatch invalidates that reuse.
 
 Treat an authenticated-user current-HEAD `APPROVED` review with **no marker** as
 legacy code coverage when the ledger proves it remains approved/undismissed, is
@@ -214,10 +226,13 @@ fi
   proved unless a pending interaction requires it.
 - `reviewed`: do not reopen the code. Revalidate current CI, threads, direct request,
   dismissal state, and payload completeness. Submit `concern`/`waiting` only with
-  `submit-comment`, regardless of request or CI. For `clean`: pending/unknown CI retains
-  the handoff, finalizes `ci-waiting`, and advances; concrete CI failure becomes current
-  read-only evidence work—inspect logs/diff and update the verdict, never edit or push
-  someone else's branch. Only clean CI plus clean threads may submit, using
+  `submit-comment`, regardless of request or CI. For `clean`: unresolved threads route
+  to feedback handling; a concrete CI failure becomes current read-only evidence
+  work—inspect logs/diff and update the verdict, never edit or push someone else's
+  branch. Pending/unknown CI or unresolved/conflicting mergeability with no concrete
+  code failure must submit one gate-waiting comment through `submit-comment`. Retain
+  the handoff until that post is confirmed, then clear it, finalize `ci-waiting`, and
+  advance. Only clean CI plus clean threads may submit `verdict=clean`, using
   `submit-approve` for a direct user request and `submit-comment` otherwise.
 
 A confirmed state mismatch or guard exit 3 clears the handoff and restarts this PR
@@ -277,10 +292,11 @@ instructions when resuming.
 
 If a review cannot finish after real progress, save `reviewing`, remove the
 worktree/private ref, and break without advancing. When evidence completes, save
-`reviewed` before cleanup. Pending/unknown CI may then finalize `ci-waiting` and advance
-while retaining that handoff; if only remaining submission time is insufficient, do
-not advance and break. Never save an empty placeholder or call an unvisited item
-deferred.
+`reviewed` before cleanup. If only an external CI/mergeability gate remains, proceed
+to the visible gate-waiting outcome instead of silently finalizing `ci-waiting`.
+Retain `reviewed` and break without advancing only when the remaining submission time
+is insufficient or a guarded outcome cannot be confirmed. Never save an empty
+placeholder or call an unvisited item deferred.
 
 ```bash
 "$GUARD" verify-external "$OWNER" "$REPO" "$NUMBER" "$PR_STATE"
@@ -299,6 +315,11 @@ changes; otherwise name the checked risk areas in 1–3 concrete sentences.
   scenario, minus ledger duplicates.
 - No new finding but an unresolved critical concern: concise `verdict=waiting`, never
   clean/approve.
+- Completed clean code review blocked only by pending/unknown CI or unresolved/
+  conflicting mergeability: a concise `verdict=waiting action=comment` review stating
+  that the current HEAD was reviewed, naming the concrete risk areas checked, and
+  naming the live gate. It must not begin with `LGTM` or imply approval. This visible
+  marker is required even when no direct review request exists.
 - No concern and effective CI/threads clean: `verdict=clean`; only here does a direct
   request use `submit-approve`, otherwise use `submit-comment`.
 
@@ -306,9 +327,10 @@ All writes go through `pr-review-guard.sh`; never call `gh pr comment/review` di
 request changes, close, or merge. Exit 3 means confirmed stale state: clear the
 handoff and restart fresh. Exit 4 means the submission deadline arrived: retain the
 `reviewed` handoff and break without advancing. A network error is indeterminate:
-reconcile the exact marker/HEAD read-only and never retry blindly. After a confirmed post (or an already-handled current-head outcome),
-clear the handoff, finalize its receipt/cursor, and continue to the next queue row if
-the next deep-item time check passes.
+reconcile the exact marker/HEAD read-only and never retry blindly. After a confirmed
+post (including a gate-waiting post) or an already-handled current-head outcome, clear
+the handoff, finalize its receipt/cursor, and continue to the next queue row if the
+next deep-item time check passes.
 
 ## 3. Cleanup and report
 

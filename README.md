@@ -56,6 +56,9 @@ Reviews fail closed: each PR gets a fresh complete conversation snapshot, clean
 verdicts require explicit diff/call-path/test evidence, and a bundled guard rechecks
 HEAD, comments, reviews, threads, draft/open state, and CI immediately before posting.
 New feedback invalidates an older clean marker even when no new commit was pushed.
+When a completed clean review is blocked only by CI or mergeability, the sweep leaves
+a visible HEAD-bound waiting review instead of hiding the result in local state; that
+marker prevents duplicate review while the same gate remains.
 The full PR inventory uses a persistent fair queue and processes PRs one at a time.
 After each item, the next deep item starts only when the review-time floor still fits;
 otherwise the untouched tail stays queued rather than being bulk-skipped. Interrupted

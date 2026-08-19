@@ -21,7 +21,8 @@ Skills (each in `skills/<name>/SKILL.md`):
 - `process-prs` — fix feedback on the user's PRs; review others' PRs (critical
   issues when found; otherwise a concise, concrete rationale, with bare `LGTM` only
   for extremely simple changes; fail closed on incomplete evidence or stale state,
-  approve only when clean and review was requested, and persist fair round-robin
+  approve only when clean and review was requested, leave a visible HEAD-bound
+  waiting outcome when external gates block approval, and persist fair round-robin
   progress plus HEAD/state-bound handoffs across bounded runs).
 - `check-status` — read-only health check: is a sweep running, is cron firing, what
   did recent runs do, and what specifically to fix when they didn't.

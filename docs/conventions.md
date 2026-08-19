@@ -153,6 +153,15 @@ clean-only predicates while still allowing a concrete concern. Older current-log
 markers without these attributes still identify our output, but a review skill must
 not treat them as proof that nothing changed.
 
+A completed review must leave a visible marked outcome even when approval is blocked
+solely by pending/unknown CI or unresolved/conflicting mergeability. In that case post
+a `verdict=waiting action=comment` review which says the current HEAD was fully
+reviewed, summarizes the checked risk areas, reports that no blocking code finding was
+found, and names the live gate. A merge conflict blocks approval, not review
+visibility. While HEAD/base/state and the gate still match, that marker prevents a
+duplicate review or comment; if the gate clears without another relevant state change,
+reuse it as exact-HEAD code coverage and route only the live approval predicates.
+
 CI is deliberately excluded from the durable `state=` token because posting a review
 can itself trigger checks. Re-read guarded HEAD/test-merge CI predicates on every
 clean skip and immediately before every clean submission. Prefer an exact-parent
@@ -182,6 +191,9 @@ Before acting on any PR, issue, thread, or discussion:
   and a thread we replied to which has since been answered may need us again.
 - One run failing halfway must be safe to re-run: post the marker comment only **after**
   the action it records (push, fix, review) has succeeded.
+- A completed code review may not exist only in a local handoff. If an external gate
+  blocks a clean outcome, publish the gate-waiting marker first; retain the handoff
+  only until that guarded post is confirmed or when safe submission was not possible.
 - The PR sweep processes one item at a time through a persistent fair queue; its cursor
   is scheduling state, never proof that an item was handled. After each item, start the
   next deep review only when the review-time floor still fits. Otherwise leave the

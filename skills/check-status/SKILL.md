@@ -146,12 +146,15 @@ default.
 
 Use `show`; never parse handoff internals. At most one `reviewing` handoff may exist,
 because partial work holds the cursor and must resume before later deep work. Multiple
-`reviewed` handoffs are valid when completed reviews await CI while the queue moves.
+`reviewed` handoffs are valid only transiently when a guarded outcome could not safely
+be attempted or confirmed. A completed clean review awaiting CI or mergeability must
+normally have a visible gate-waiting marker and no retained handoff; stable reviewed
+handoffs across later ticks indicate a stale runtime or failed submission path.
 A valid open handoff must appear in `queue-rows` even if GitHub search no longer lists
 that PR; otherwise continuation state has become orphaned from scheduling.
 A `reviewing` handoff and cursor unchanged across several sufficiently long successful
 ticks means work is stuck; a `reviewed` handoff is stale only when its PR gates have
-settled or its queue row recurred without submission/clear. Multiple `reviewing`
+settled, or when its queue row recurred without a confirmed outcome/clear. Multiple `reviewing`
 handoffs indicate broken serial ownership.
 Routed `review_requested`, `assign`, and Discussion
 notifications may remain unread only while their open item still needs its owner
