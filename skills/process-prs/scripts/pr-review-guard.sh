@@ -142,12 +142,17 @@ QUERY='query($o:String!,$r:String!,$n:Int!){
           }
         }
       }
-      timelineItems(itemTypes:[REVIEW_DISMISSED_EVENT],first:100){
+      timelineItems(itemTypes:[REVIEW_DISMISSED_EVENT,REVIEW_REQUESTED_EVENT,REVIEW_REQUEST_REMOVED_EVENT],first:100){
         pageInfo{hasNextPage}
-        nodes{... on ReviewDismissedEvent{
-          id createdAt dismissalMessage previousReviewState actor{login}
-          review{id author{login} state body commit{oid}}
-        }}
+        nodes{
+          __typename
+          ... on ReviewDismissedEvent{
+            id createdAt dismissalMessage previousReviewState actor{login}
+            review{id author{login} state body commit{oid}}
+          }
+          ... on ReviewRequestedEvent{id createdAt requestedReviewer{... on User{login}}}
+          ... on ReviewRequestRemovedEvent{id createdAt requestedReviewer{... on User{login}}}
+        }
       }
     }
   }
@@ -175,7 +180,7 @@ elif $pr.reviews.pageInfo.hasNextPage then error("reviews exceed 100")
 elif $pr.comments.pageInfo.hasNextPage then error("issue comments exceed 100")
 elif $pr.reviewThreads.pageInfo.hasNextPage then error("review threads exceed 100")
 elif ([ $pr.reviewThreads.nodes[] | select(.comments.pageInfo.hasNextPage) ] | length) > 0 then error("a review thread exceeds 100 comments")
-elif $pr.timelineItems.pageInfo.hasNextPage then error("review dismissal events exceed 100")
+elif $pr.timelineItems.pageInfo.hasNextPage then error("review dismissal/request events exceed 100")
 elif (($pr.commits.nodes[0].commit.statusCheckRollup.contexts.pageInfo.hasNextPage // false)) then error("check contexts exceed 100")
 elif (($pr.potentialMergeCommit.statusCheckRollup.contexts.pageInfo.hasNextPage // false)) then error("merge-commit check contexts exceed 100")
 elif (($pr.potentialMergeCommit.parents.pageInfo.hasNextPage // false)) then error("test-merge commit has more than two parents")
@@ -276,7 +281,7 @@ else
         }
       ] | sort_by(.id)),
       reviewDismissals:([
-        $pr.timelineItems.nodes[] |
+        $pr.timelineItems.nodes[] | select(.__typename == "ReviewDismissedEvent") |
         {id,createdAt,dismissalMessage,previousReviewState,actor:(.actor.login // null),review:{id:.review.id,author:(.review.author.login // null),state:.review.state,body:.review.body,commit:(.review.commit.oid // null)}}
       ] | sort_by(.id))
     }
@@ -304,7 +309,24 @@ else
     $pr.headRefOid,
     $pr.baseRefOid,
     $viewer,
-    (([ $pr.reviewRequests.nodes[].requestedReviewer | select(.__typename == "User" and .login == $viewer) ] | length) > 0),
+    (
+      # A direct request stands if it is live, or if GitHub silently consumed it
+      # when the viewer submitted a marker-bearing review (no removal event is
+      # emitted then). An explicit un-request leaves ReviewRequestRemovedEvent
+      # and clears the request for good.
+      (([ $pr.reviewRequests.nodes[].requestedReviewer | select(.__typename == "User" and .login == $viewer) ] | length) > 0)
+      or
+      (
+        ([ $pr.timelineItems.nodes[] | select(.__typename == "ReviewRequestedEvent" and (.requestedReviewer.login // "") == $viewer) | .createdAt ] | max // "") as $lastRequested |
+        ([ $pr.timelineItems.nodes[] | select(.__typename == "ReviewRequestRemovedEvent" and (.requestedReviewer.login // "") == $viewer) | .createdAt ] | max // "") as $lastRemoved |
+        ($lastRequested != "") and ($lastRequested > $lastRemoved) and
+        (([ $pr.reviews.nodes[] | select(
+          (.author.login // "") == $viewer and
+          ((.body // "") | contains("good-fellow:v1")) and
+          .submittedAt >= $lastRequested
+        ) ] | length) > 0)
+      )
+    ),
     ($pr.author.login // ""),
     (
       $pr.mergeable == "MERGEABLE" and
@@ -326,6 +348,7 @@ else
     (([ $pr.reviewThreads.nodes[] | select(.isResolved == false) ] | length) == 0),
     (
       ([ $pr.timelineItems.nodes[] | select(
+        .__typename == "ReviewDismissedEvent" and
         (.review.author.login // "") == $viewer and
         (.review.commit.oid // "") == $pr.headRefOid and
         .previousReviewState == "APPROVED" and
