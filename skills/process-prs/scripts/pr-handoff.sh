@@ -5,6 +5,11 @@ set -Eeuo pipefail
 export GH_PROMPT_DISABLED=1
 export NO_COLOR=1
 
+HANDOFF_LIB="$(CDPATH='' cd "$(dirname "$0")" && pwd -P)/lib.sh"
+[ -f "$HANDOFF_LIB" ] && [ ! -L "$HANDOFF_LIB" ] || { printf 'pr-handoff: lib.sh is missing or unsafe\n' >&2; exit 64; }
+LIB_TOOL='pr-handoff'
+. "$HANDOFF_LIB"
+
 STATE_DIR="${GOOD_FELLOW_STATE_DIR:-$HOME/.good-fellow}"
 MAX_PAYLOAD_BYTES=1048576
 MAGIC='good-fellow-pr-handoff-v1'
@@ -38,26 +43,6 @@ usage() {
   exit 64
 }
 
-die() {
-  printf 'pr-handoff: %s\n' "$*" >&2
-  exit 64
-}
-
-validate_target() {
-  case "$1" in ''|*[!A-Za-z0-9_.-]*) die 'invalid owner' ;; esac
-  case "$2" in ''|*[!A-Za-z0-9_.-]*) die 'invalid repository' ;; esac
-  case "$3" in ''|0|*[!0-9]*) die 'invalid pull request number' ;; esac
-}
-
-validate_regular_file() {
-  [ -f "$1" ] && [ ! -L "$1" ] || die "$2 must be a regular, non-symlink file"
-}
-
-validate_oid() {
-  case "$1" in ''|*[!0-9a-f]*) die "$2 must be a lowercase hexadecimal SHA" ;; esac
-  [ "${#1}" -eq 40 ] || die "$2 must be a 40-character SHA"
-}
-
 validate_token() {
   case "$1" in ''|*[!0-9a-f]*) die 'state token must be lowercase hexadecimal' ;; esac
   [ "${#1}" -eq 64 ] || die 'state token must be 64 characters'
@@ -82,30 +67,18 @@ handoff_path() {
 }
 
 snapshot_values() {
-  local snapshot=$1 first second
+  local snapshot=$1
+  # The snapshot is a caller-owned private temp file with no concurrent writer;
+  # the guard re-validates the 11-line format and each field's shape per read.
   validate_regular_file "$snapshot" 'snapshot file'
-  first=$("$GUARD" head "$snapshot")
-  SNAPSHOT_HEAD=$first
-  first=$("$GUARD" base "$snapshot")
-  SNAPSHOT_BASE=$first
-  first=$("$GUARD" token "$snapshot")
-  SNAPSHOT_TOKEN=$first
-  first=$("$GUARD" legacy-token "$snapshot")
-  SNAPSHOT_LEGACY_TOKEN=$first
+  SNAPSHOT_HEAD=$("$GUARD" head "$snapshot")
+  SNAPSHOT_BASE=$("$GUARD" base "$snapshot")
+  SNAPSHOT_TOKEN=$("$GUARD" token "$snapshot")
+  SNAPSHOT_LEGACY_TOKEN=$("$GUARD" legacy-token "$snapshot")
   validate_oid "$SNAPSHOT_HEAD" 'snapshot head'
   validate_oid "$SNAPSHOT_BASE" 'snapshot base'
   validate_token "$SNAPSHOT_TOKEN"
   validate_token "$SNAPSHOT_LEGACY_TOKEN"
-
-  # Refuse a snapshot that is being rewritten while its four fields are read.
-  second=$("$GUARD" head "$snapshot")
-  [ "$second" = "$SNAPSHOT_HEAD" ] || { printf 'pr-handoff: snapshot changed while reading\n' >&2; exit 3; }
-  second=$("$GUARD" base "$snapshot")
-  [ "$second" = "$SNAPSHOT_BASE" ] || { printf 'pr-handoff: snapshot changed while reading\n' >&2; exit 3; }
-  second=$("$GUARD" token "$snapshot")
-  [ "$second" = "$SNAPSHOT_TOKEN" ] || { printf 'pr-handoff: snapshot changed while reading\n' >&2; exit 3; }
-  second=$("$GUARD" legacy-token "$snapshot")
-  [ "$second" = "$SNAPSHOT_LEGACY_TOKEN" ] || { printf 'pr-handoff: snapshot changed while reading\n' >&2; exit 3; }
 }
 
 verify_snapshot_target() {
@@ -115,7 +88,13 @@ verify_snapshot_target() {
   else
     status=$?
   fi
-  [ "$status" -eq 3 ] && return 3
+  # Live external state drifted from the caller's snapshot. This says nothing
+  # about the stored handoff, so it must not be conflated with the stale-handoff
+  # exit 3: the caller recaptures a fresh snapshot and retries.
+  [ "$status" -eq 3 ] && {
+    printf 'pr-handoff: snapshot no longer matches live external state; recapture and retry\n' >&2
+    return 5
+  }
   printf 'pr-handoff: unable to verify snapshot target/freshness\n' >&2
   return 75
 }
@@ -178,10 +157,13 @@ capture_queue_rows() {
        (.user.login // ""),.html_url,((.draft // false)|tostring)] | @tsv'); then
       :
     else
-      status=$?
-      printf 'pr-handoff: unable to capture PR for %s/%s#%s\n' \
+      # One unreachable PR (deleted/private repo, transient API failure) must
+      # not abort the whole sweep. Skip this row; the state file stays for a
+      # later tick or manual reconciliation, and the per-PR guard still
+      # protects any mutation downstream.
+      printf 'pr-handoff: unable to capture PR for %s/%s#%s; skipping its queue row\n' \
         "$STORED_OWNER" "$STORED_REPO" "$STORED_NUMBER" >&2
-      return 75
+      continue
     fi
     IFS=$'\t' read -r api_number api_state api_repo api_url author html_url draft extra <<EOF
 $record
@@ -196,32 +178,21 @@ EOF
     case "$api_state" in
       open) printf '%s\t%s\t%s\t%s\t%s\n' \
         "$repo_url" "$STORED_NUMBER" "$author" "$html_url" "$draft" >> "$output" ;;
-      closed) ;;
+      closed)
+        # Fold pruning into the capture: the row is authoritative proof the PR
+        # closed, so a separate prune pass (one more REST call per handoff
+        # every tick) is unnecessary.
+        printf 'pr-handoff: pruning handoff for closed %s/%s#%s\n' \
+          "$STORED_OWNER" "$STORED_REPO" "$STORED_NUMBER" >&2
+        [ -f "$file" ] && [ ! -L "$file" ] && find "$file" -type f -delete
+        ;;
       *) die 'PR response has invalid state' ;;
     esac
   done
 }
 
 normalize_queue_rows() {
-  LC_ALL=C sort -t "$TAB" -k1,1 -k2,2n "$1" | awk -F "$TAB" '
-    NF {
-      if (NF != 5 || $2 !~ /^[1-9][0-9]*$/ || ($5 != "true" && $5 != "false")) {
-        print "pr-handoff: malformed queue row" > "/dev/stderr"
-        exit 64
-      }
-      key=$1 FS $2
-      if (key == previous_key) {
-        if ($0 != previous_row) {
-          print "pr-handoff: conflicting queue rows for " key > "/dev/stderr"
-          exit 64
-        }
-        next
-      }
-      print
-      previous_key=key
-      previous_row=$0
-    }
-  '
+  LC_ALL=C sort -t "$TAB" -k1,1 -k2,2n "$1" | validate_dedupe_rows
 }
 
 SCRIPT_DIR=$(CDPATH='' cd "$(dirname "$0")" && pwd -P)
@@ -316,17 +287,29 @@ case "$mode" in
     ;;
   reviewing-key)
     [ "$#" -eq 1 ] || usage
-    reviewing_count=0
+    # Serial ownership allows at most one reviewing handoff. Duplicates mean a
+    # crashed or misbehaving earlier run; fail-open by keeping the newest file
+    # and deleting the rest, or one bad tick would wedge every future sweep.
+    reviewing_newest=''
     for file in "$STATE_DIR"/process-prs-handoff-*.state; do
       [ -e "$file" ] || [ -L "$file" ] || continue
       load_handoff_for_scan "$file" || continue
       [ "$STORED_PHASE" = reviewing ] || continue
-      reviewing_count=$((reviewing_count + 1))
-      [ "$reviewing_count" -le 1 ] || die 'multiple reviewing handoffs violate serial ownership'
-      reviewing_repo="https://api.github.com/repos/$STORED_OWNER/$STORED_REPO"
-      reviewing_number=$STORED_NUMBER
+      if [ -z "$reviewing_newest" ]; then
+        reviewing_newest=$file
+      elif [ "$file" -nt "$reviewing_newest" ]; then
+        printf 'pr-handoff: deleting duplicate reviewing handoff (serial ownership violated): %s\n' "$reviewing_newest" >&2
+        find "$reviewing_newest" -type f -delete
+        reviewing_newest=$file
+      else
+        printf 'pr-handoff: deleting duplicate reviewing handoff (serial ownership violated): %s\n' "$file" >&2
+        find "$file" -type f -delete
+      fi
     done
-    [ "$reviewing_count" -eq 0 ] || printf '%s\t%s\n' "$reviewing_repo" "$reviewing_number"
+    if [ -n "$reviewing_newest" ]; then
+      load_handoff "$reviewing_newest"
+      printf '%s\t%s\n' "https://api.github.com/repos/$STORED_OWNER/$STORED_REPO" "$STORED_NUMBER"
+    fi
     ;;
   queue-rows)
     [ "$#" -eq 1 ] || usage

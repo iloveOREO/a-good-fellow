@@ -29,8 +29,7 @@ INVENTORY_FILE=$(mktemp "${TMPDIR:-/tmp}/good-fellow-pr-inventory.XXXXXX")
 ORDERED_FILE=$(mktemp "${TMPDIR:-/tmp}/good-fellow-pr-queue.XXXXXX")
 NOTIFICATIONS_FILE=$(mktemp "${TMPDIR:-/tmp}/good-fellow-pr-notifications.XXXXXX")
 "$INVENTORY_TOOL" > "$SEARCH_INVENTORY_FILE"
-"$HANDOFF_TOOL" prune
-"$HANDOFF_TOOL" queue-rows > "$HANDOFF_INVENTORY_FILE"
+"$HANDOFF_TOOL" queue-rows > "$HANDOFF_INVENTORY_FILE"  # prunes closed-PR handoffs itself
 awk '1' "$SEARCH_INVENTORY_FILE" "$HANDOFF_INVENTORY_FILE" > "$INVENTORY_FILE"
 REVIEWING_KEY=$("$HANDOFF_TOOL" reviewing-key)
 if [ -n "$REVIEWING_KEY" ]; then
@@ -190,7 +189,14 @@ The snapshot must prove open/non-draft state and complete bounded connections; n
 fall back to a smaller query. Read its full ledger before any decision, through
 `"$GUARD" ledger` — it is the only PR JSON in the file. The state tokens are stored
 as digests of filtered captures that deliberately strip the authenticated user's own
-marker reviews/comments, so posting a marker does not invalidate its own token. The durable
+marker reviews/comments, so posting a marker does not invalidate its own token.
+
+`snapshot` exit 7 means the PR durably exceeds a bounded connection (over 100
+reviews, comments, threads, or events) and can never be safely captured: it is not
+a transient failure, so do not hold the queue for it. Finalize the row as
+`snapshot-overflow` with no receipt and no write, advance the cursor, and report the
+skipped PR so repeated overflows stay visible; every other capture failure defers
+the row without advancing, as before. The durable
 external token binds HEAD/base and review-relevant PR/conversation state, but excludes
 CI, `mergeable`, `mergeStateStatus`, and the synthetic `potentialMergeCommit`; those
 are re-read as live submission gates and never trigger a code rereview by themselves.
@@ -239,9 +245,13 @@ do not use this shortcut.
 Only after those current-state gates, match the saved snapshot's head/base/external
 token. `match` prints `reviewing` or `reviewed` for a stable-or-legacy token match,
 and `reviewing-migrate` or `reviewed-migrate` when HEAD/base match but the token needs
-ledger reconciliation. Exit 1 means none and exit 3 means HEAD/base stale. A stale,
-malformed, or semantically incomplete handoff is cleared and the PR is reviewed
-fresh—never advance it merely because saved state became stale.
+ledger reconciliation. Exit 1 means none. Exit 3 means the stored handoff is bound to
+a different HEAD/base than the PR — it is genuinely stale. Exit 5 means only the local
+snapshot went stale against live state while matching; the handoff was not judged at
+all, so never clear it for a 5 — recapture `PR_STATE` (fresh snapshot plus tokens) and
+retry `match` once, deferring the row if the retry also returns 5. A stale, malformed,
+or semantically incomplete handoff is cleared and the PR is reviewed fresh—never
+advance it merely because saved state became stale.
 
 ```bash
 if PHASE=$("$HANDOFF_TOOL" match "$OWNER" "$REPO" "$NUMBER" "$PR_STATE"); then
@@ -252,10 +262,14 @@ else
   case "$status" in
     1) PHASE='' ;;
     3|64) "$HANDOFF_TOOL" clear "$OWNER" "$REPO" "$NUMBER"; PHASE='' ;;
+    5) echo "recapture: snapshot went stale during match" ;;  # refresh PR_STATE, retry once
     *) echo "defer: handoff freshness unavailable (status $status)"; break ;;
   esac
 fi
 ```
+
+`save` performs the same live verification and can also return 5: recapture and
+re-save once rather than treating it as failure or clearing anything.
 
 For a `*-migrate` phase, load the payload before clearing anything and compare its
 saved complete ledger, title/body evidence, range, and handled comment/thread IDs with

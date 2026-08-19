@@ -6,10 +6,17 @@ set -Eeuo pipefail
 export GH_PROMPT_DISABLED=1
 export NO_COLOR=1
 
+GUARD_SCRIPT_DIR=$(CDPATH='' cd "$(dirname "$0")" && pwd -P)
+GUARD_LIB="$GUARD_SCRIPT_DIR/lib.sh"
+[ -f "$GUARD_LIB" ] && [ ! -L "$GUARD_LIB" ] || { printf 'pr-review-guard: lib.sh is missing or unsafe\n' >&2; exit 64; }
+LIB_TOOL='pr-review-guard'
+. "$GUARD_LIB"
+
 VERIFY_TEMP=''
 SUBMIT_SNAPSHOT_TEMP=''
 SUBMIT_BODY_TEMP=''
 SNAPSHOT_CORE_TEMP=''
+SNAPSHOT_ERR_TEMP=''
 BODY_VERDICT=''
 
 cleanup() {
@@ -17,6 +24,7 @@ cleanup() {
   [ -z "$SUBMIT_SNAPSHOT_TEMP" ] || rm -f "$SUBMIT_SNAPSHOT_TEMP"
   [ -z "$SUBMIT_BODY_TEMP" ] || rm -f "$SUBMIT_BODY_TEMP"
   [ -z "$SNAPSHOT_CORE_TEMP" ] || rm -f "$SNAPSHOT_CORE_TEMP"
+  [ -z "$SNAPSHOT_ERR_TEMP" ] || rm -f "$SNAPSHOT_ERR_TEMP"
 }
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
@@ -39,17 +47,6 @@ EOF
   exit 64
 }
 
-die() {
-  printf 'pr-review-guard: %s\n' "$*" >&2
-  exit 64
-}
-
-validate_target() {
-  case "$1" in ''|*[!A-Za-z0-9_.-]*) die 'invalid owner' ;; esac
-  case "$2" in ''|*[!A-Za-z0-9_.-]*) die 'invalid repository' ;; esac
-  case "$3" in ''|0|*[!0-9]*) die 'invalid pull request number' ;; esac
-}
-
 enforce_stop_epoch() {
   local stop now_epoch
   stop=${GOOD_FELLOW_RUN_STOP_AT_EPOCH:-}
@@ -61,10 +58,6 @@ enforce_stop_epoch() {
     return 4
   fi
   return 0
-}
-
-validate_regular_file() {
-  [ -f "$1" ] && [ ! -L "$1" ] || die "$2 must be a regular, non-symlink file"
 }
 
 validate_snapshot_file() {
@@ -391,9 +384,18 @@ snapshot_state() {
   [ -z "$SNAPSHOT_CORE_TEMP" ] || rm -f "$SNAPSHOT_CORE_TEMP"
   umask 077
   SNAPSHOT_CORE_TEMP=$(mktemp "${TMPDIR:-/tmp}/good-fellow-pr-core.XXXXXX")
-  if gh api graphql -f query="$QUERY" -f o="$owner" -f r="$repo" -F n="$number" --jq "$FILTER" > "$SNAPSHOT_CORE_TEMP"; then
-    :
+  SNAPSHOT_ERR_TEMP=$(mktemp "${TMPDIR:-/tmp}/good-fellow-pr-core-err.XXXXXX")
+  if gh api graphql -f query="$QUERY" -f o="$owner" -f r="$repo" -F n="$number" --jq "$FILTER" > "$SNAPSHOT_CORE_TEMP" 2> "$SNAPSHOT_ERR_TEMP"; then
+    cat "$SNAPSHOT_ERR_TEMP" >&2
   else
+    cat "$SNAPSHOT_ERR_TEMP" >&2
+    # Overflowing a bounded connection is a durable property of the PR, not a
+    # transient failure: report it distinctly (exit 7) so the queue can advance
+    # past the PR instead of retrying it forever and starving the tail.
+    if grep -q 'exceed 100' "$SNAPSHOT_ERR_TEMP"; then
+      printf 'pr-review-guard: pull request exceeds bounded snapshot capacity\n' >&2
+      return 7
+    fi
     printf 'pr-review-guard: unable to capture pull request state\n' >&2
     return 75
   fi
@@ -493,11 +495,6 @@ snapshot_line() {
     fi
   done < "$snapshot"
   die "snapshot is missing line $wanted"
-}
-
-validate_oid() {
-  case "$1" in ''|*[!0-9a-f]*) die "$2 is not a 40-character SHA" ;; esac
-  [ "${#1}" -eq 40 ] || die "$2 is not a 40-character SHA"
 }
 
 snapshot_head() {

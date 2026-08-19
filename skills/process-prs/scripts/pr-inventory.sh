@@ -5,7 +5,11 @@ set -Eeuo pipefail
 export GH_PROMPT_DISABLED=1
 export NO_COLOR=1
 export LC_ALL=C
-TAB=$(printf '\t')
+
+INVENTORY_LIB="$(CDPATH='' cd "$(dirname "$0")" && pwd -P)/lib.sh"
+[ -f "$INVENTORY_LIB" ] && [ ! -L "$INVENTORY_LIB" ] || { printf 'pr-inventory: lib.sh is missing or unsafe\n' >&2; exit 64; }
+LIB_TOOL='pr-inventory'
+. "$INVENTORY_LIB"
 
 viewer=$(gh api user --jq .login)
 case "$viewer" in ''|*[!A-Za-z0-9_.-]*) printf 'pr-inventory: invalid viewer login\n' >&2; exit 64 ;; esac
@@ -46,38 +50,30 @@ EOF
   [ -z "$rendered" ] || printf '%s\n' "$rendered"
 }
 
-dedupe_rows() {
-  sort | awk -F "$TAB" '
-    NF {
-      key=$1 FS $2
-      if (key == previous_key) {
-        if ($0 != previous_row) {
-          print "pr-inventory: conflicting rows for " key > "/dev/stderr"
-          exit 2
-        }
-        next
-      }
-      print
-      previous_key=key
-      previous_row=$0
-    }
-  '
-}
-
 inventory_round() {
-  local involves requested authored
+  # `involves:` already covers author, assignee, mention, and commenter, so a
+  # separate `author:` search can never add a row; `review-requested:` is the
+  # only qualifier not covered.
+  local involves requested
   involves=$(search_once "is:pr is:open involves:$viewer") || return $?
   requested=$(search_once "is:pr is:open review-requested:$viewer") || return $?
-  authored=$(search_once "is:pr is:open author:$viewer") || return $?
-  printf '%s\n%s\n%s\n' "$involves" "$requested" "$authored" \
+  printf '%s\n%s\n' "$involves" "$requested" \
     | sed '/^$/d' \
-    | dedupe_rows
+    | sort \
+    | validate_dedupe_rows
 }
 
 first_round=$(inventory_round)
 second_round=$(inventory_round)
-[ "$first_round" = "$second_round" ] || {
-  printf 'pr-inventory: union membership changed between verification rounds\n' >&2
-  exit 1
-}
-[ -z "$first_round" ] || printf '%s\n' "$first_round"
+if [ "$first_round" = "$second_round" ]; then
+  [ -z "$first_round" ] || printf '%s\n' "$first_round"
+else
+  # Live churn between the rounds (a PR opened, closed, or redrafted) must not
+  # zero out the whole tick: rows identical in both rounds are individually
+  # safe — every mutation is still guarded per-PR downstream — so emit the
+  # intersection and let the differing rows surface on the next tick.
+  printf 'pr-inventory: membership changed between verification rounds; emitting the stable intersection\n' >&2
+  comm -12 \
+    <(printf '%s\n' "$first_round") \
+    <(printf '%s\n' "$second_round")
+fi

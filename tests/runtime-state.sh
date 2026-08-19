@@ -88,12 +88,20 @@ cat > "$stub_bin/gh" <<'GH_STUB'
 set -Eeuo pipefail
 
 if [ "${1:-}" = api ] && [ "${2:-}" = graphql ]; then
+  if [ "${STUB_MODE:-waiting}" = overflow ]; then
+    printf 'gh: reviews exceed 100\n' >&2
+    exit 1
+  fi
   count=0
   [ ! -f "$STUB_COUNT_FILE" ] || count=$(cat "$STUB_COUNT_FILE")
   count=$((count + 1))
   printf '%s\n' "$count" > "$STUB_COUNT_FILE"
   ci=false
   if [ "${STUB_MODE:-waiting}" = approval ] && [ "$count" -ge 2 ]; then ci=true; fi
+  stable='{"pullRequest":{"stable":"same"}}'
+  if [ "${STUB_MODE:-waiting}" = drift ]; then
+    stable="{\"pullRequest\":{\"stable\":$count}}"
+  fi
   printf '%s\n' \
     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
     bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
@@ -103,7 +111,7 @@ if [ "${1:-}" = api ] && [ "${2:-}" = graphql ]; then
     "$ci" \
     true \
     true \
-    '{"pullRequest":{"stable":"same"}}' \
+    "$stable" \
     "{\"pullRequest\":{\"ciVersion\":$count}}" \
     "{\"pullRequest\":{\"legacyMergeVersion\":$count}}" \
     false \
@@ -142,7 +150,7 @@ waiting_body="$TEMP_ROOT/waiting.body"
 "$GUARD" snapshot owner repo 1 > "$waiting_snapshot"
 make_marker_body "$waiting_snapshot" comment waiting "$waiting_body" \
   '当前 HEAD 审查完成；CI 仍在运行，因此暂不批准。'
-"$GUARD" verify owner repo 1 "$waiting_snapshot" > "$TEMP_ROOT/waiting.verify"
+"$GUARD" verify-external owner repo 1 "$waiting_snapshot" > "$TEMP_ROOT/waiting.verify"
 grep -Fx fresh "$TEMP_ROOT/waiting.verify" >/dev/null || fail 'stable verify rejected CI-only drift'
 "$GUARD" submit-comment owner repo 1 "$waiting_snapshot" "$waiting_body" \
   > "$TEMP_ROOT/waiting.submit"
@@ -192,6 +200,70 @@ printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
   "$migrate_token" reviewed "$legacy_size" "$legacy_payload" > "$migrate_file"
 migrate_phase=$(GOOD_FELLOW_STATE_DIR="$migrate_state" "$HANDOFF" match owner repo 1 "$legacy_snapshot")
 assert_eq "$migrate_phase" reviewed-migrate
+
+# The snapshot lines 9/11 are digests: the only PR JSON in the file is the
+# complete ledger on line 10.
+sed -n '9p;11p' "$legacy_snapshot" | grep -Ex '[0-9a-f]{64}' | wc -l | grep -Fx 2 >/dev/null ||
+  fail 'token lines are not stored as digests'
+"$GUARD" ledger "$legacy_snapshot" | grep -F '"pullRequest"' >/dev/null ||
+  fail 'ledger line lost its JSON'
+
+# Live drift between capturing a snapshot and matching it must return 5
+# (recapture and retry), never 3 (clear the handoff): the handoff itself was
+# not judged.
+export STUB_MODE=drift
+printf '0\n' > "$STUB_COUNT_FILE"
+drift_snapshot="$TEMP_ROOT/drift.snapshot"
+"$GUARD" snapshot owner repo 1 > "$drift_snapshot"
+drift_head=$("$GUARD" head "$drift_snapshot")
+drift_base=$("$GUARD" base "$drift_snapshot")
+drift_token=$("$GUARD" token "$drift_snapshot")
+drift_state="$TEMP_ROOT/drift-state"
+mkdir -p "$drift_state"
+drift_file="$drift_state/process-prs-handoff-5-owner-4-repo-1.state"
+printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
+  good-fellow-pr-handoff-v1 owner repo 1 "$drift_head" "$drift_base" \
+  "$drift_token" reviewed "$legacy_size" "$legacy_payload" > "$drift_file"
+set +e
+GOOD_FELLOW_STATE_DIR="$drift_state" "$HANDOFF" match owner repo 1 "$drift_snapshot" \
+  > "$TEMP_ROOT/drift.out" 2> "$TEMP_ROOT/drift.err"
+drift_status=$?
+set -e
+assert_eq "$drift_status" 5
+grep -F 'recapture and retry' "$TEMP_ROOT/drift.err" >/dev/null ||
+  fail 'drift did not ask for a recapture'
+
+# A durably over-capacity PR reports exit 7 so the queue can advance past it
+# instead of retrying forever.
+export STUB_MODE=overflow
+set +e
+"$GUARD" snapshot owner repo 1 > "$TEMP_ROOT/overflow.snapshot" 2> "$TEMP_ROOT/overflow.err"
+overflow_status=$?
+set -e
+assert_eq "$overflow_status" 7
+grep -F 'bounded snapshot capacity' "$TEMP_ROOT/overflow.err" >/dev/null ||
+  fail 'overflow was not reported distinctly'
+export STUB_MODE=waiting
+
+# Duplicate reviewing handoffs self-heal: the newest file wins, the older one
+# is deleted with a warning, and the sweep keeps running.
+dup_state="$TEMP_ROOT/dup-reviewing"
+mkdir -p "$dup_state"
+dup_old="$dup_state/process-prs-handoff-5-owner-4-repo-1.state"
+dup_new="$dup_state/process-prs-handoff-5-owner-4-repi-2.state"
+printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
+  good-fellow-pr-handoff-v1 owner repo 1 "$legacy_head" "$legacy_base" \
+  "$legacy_token" reviewing "$legacy_size" "$legacy_payload" > "$dup_old"
+printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
+  good-fellow-pr-handoff-v1 owner repi 2 "$legacy_head" "$legacy_base" \
+  "$legacy_token" reviewing "$legacy_size" "$legacy_payload" > "$dup_new"
+touch -t 202001010000 "$dup_old"
+dup_key=$(GOOD_FELLOW_STATE_DIR="$dup_state" "$HANDOFF" reviewing-key 2> "$TEMP_ROOT/dup.err")
+assert_eq "$dup_key" $'https://api.github.com/repos/owner/repi\t2'
+[ ! -e "$dup_old" ] || fail 'older duplicate reviewing handoff survived'
+[ -f "$dup_new" ] || fail 'newest reviewing handoff was deleted'
+grep -F 'serial ownership violated' "$TEMP_ROOT/dup.err" >/dev/null ||
+  fail 'missing duplicate reviewing warning'
 
 # Exercise the exact runner embedded in onboard with legacy 1800-second settings.
 # Stubbed CLIs keep this test offline while proving both values clamp and the run

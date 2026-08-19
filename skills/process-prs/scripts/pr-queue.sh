@@ -3,6 +3,11 @@
 # cursor atomically. A crash before advance retries the same item next tick.
 set -Eeuo pipefail
 
+QUEUE_LIB="$(CDPATH='' cd "$(dirname "$0")" && pwd -P)/lib.sh"
+[ -f "$QUEUE_LIB" ] && [ ! -L "$QUEUE_LIB" ] || { printf 'pr-queue: lib.sh is missing or unsafe\n' >&2; exit 64; }
+LIB_TOOL='pr-queue'
+. "$QUEUE_LIB"
+
 STATE_DIR="${GOOD_FELLOW_STATE_DIR:-$HOME/.good-fellow}"
 CURSOR_FILE="$STATE_DIR/process-prs.cursor"
 TAB=$(printf '\t')
@@ -55,22 +60,13 @@ case "$mode" in
         cursor_number=''
       fi
     fi
-    LC_ALL=C sort -t "$TAB" -k1,1 -k2,2n "$inventory" | awk -F "$TAB" -v cr="$cursor_repo" -v cn="$cursor_number" -v pr="$priority_repo" -v pn="$priority_number" '
+    LC_ALL=C sort -t "$TAB" -k1,1 -k2,2n "$inventory" | validate_dedupe_rows | awk -F "$TAB" -v cr="$cursor_repo" -v cn="$cursor_number" -v pr="$priority_repo" -v pn="$priority_number" '
       function key(repo, number) { return repo "\t" sprintf("%020d", number) }
       NF {
-        if (NF != 5 || $2 !~ /^[1-9][0-9]*$/ || ($5 != "true" && $5 != "false")) { print "pr-queue: malformed inventory row" > "/dev/stderr"; bad=1; next }
-        rawkey=$1 FS $2
-        if (rawkey == previous_key) {
-          if ($0 != previous_row) { print "pr-queue: conflicting inventory rows for " rawkey > "/dev/stderr"; bad=1 }
-          next
-        }
         rows[++count]=$0
         keys[count]=key($1,$2)
-        previous_key=rawkey
-        previous_row=$0
       }
       END {
-        if (bad) exit 64
         if (count == 0) exit 0
         if (pr != "") {
           priority=key(pr,pn)
