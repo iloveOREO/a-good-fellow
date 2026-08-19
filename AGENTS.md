@@ -13,12 +13,16 @@ Skills (each in `skills/<name>/SKILL.md`):
 
 - `onboard` — interactive setup: skill installation, gh login, instruction gist,
   headless auth, generated cron runner. Start here on a fresh machine.
-- `reply-notifications` — sweep unread notifications, reply where warranted.
+- `reply-notifications` — final sweep: reply where warranted and reconcile routed
+  notifications against owner-sweep receipts/current state.
 - `join-discussions` — reply to Discussions that @mention the user.
 - `fix-assigned-issues` — fix assigned issues and open PRs.
 - `create-pr` — commit + push + open a PR from a working tree with changes.
 - `process-prs` — fix feedback on the user's PRs; review others' PRs (critical
-  issues only, `LGTM` otherwise, approve when clean and review was requested).
+  issues when found; otherwise a concise, concrete rationale, with bare `LGTM` only
+  for extremely simple changes; fail closed on incomplete evidence or stale state,
+  approve only when clean and review was requested, and persist fair round-robin
+  progress plus HEAD/state-bound handoffs across bounded runs).
 - `check-status` — read-only health check: is a sweep running, is cron firing, what
   did recent runs do, and what specifically to fix when they didn't.
 - `sync-instructions` — pull the instruction gist to the local cache, or edit and
@@ -28,5 +32,6 @@ Only `onboard` and `sync-instructions` change the user's instructions or machine
 setup; `check-status` never changes anything without asking.
 
 The scheduled entry point is `~/.good-fellow/run-good-fellow.sh` (cron, every 30
-minutes) — generated per-machine by the onboard skill from the reference
-implementation embedded in `skills/onboard/SKILL.md`; it is not versioned here.
+minutes) — a stable launcher that atomically selects a versioned runtime/runner pair
+via `~/.good-fellow/deployment-current`. Onboard generates these machine-local files
+from `skills/onboard/SKILL.md`; they are not versioned here.
