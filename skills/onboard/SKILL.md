@@ -254,6 +254,10 @@ done
 test -x <REPO_ROOT>/tests/runtime-state.sh
 <REPO_ROOT>/tests/runtime-state.sh
 test -d "$DEPLOY_DIR/codex-home/skills"
+# Stamp the deployment so check-status can compare one value instead of
+# grepping the runtime for incidental strings.
+{ git -C <REPO_ROOT> rev-parse HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S; } \
+  > "$DEPLOY_DIR/runtime-version"
 ```
 
 Reference implementation:
@@ -449,12 +453,17 @@ remove_count=$((${#OLD_DEPLOYS[@]} - KEEP_DEPLOYMENTS))
 remove_index=0
 while [ "$remove_index" -lt "$remove_count" ]; do
   OLD_DEPLOY=${OLD_DEPLOYS[$remove_index]}
+  remove_index=$((remove_index + 1))
+  # Glob order is lexicographic, not chronological: a stepped-back clock or a
+  # same-second redeploy can sort the live deployment first. Never delete the
+  # deployment just published or the one the pointer names.
+  [ "$OLD_DEPLOY" != "${DEPLOY_DIR:-}" ] || continue
+  [ "$OLD_DEPLOY" != "$(cat "$HOME/.good-fellow/deployment-current" 2>/dev/null)" ] || continue
   if [ -d "$OLD_DEPLOY" ] && [ ! -L "$OLD_DEPLOY" ]; then
     case "$OLD_DEPLOY" in
       "$HOME/.good-fellow"/deploy-*) find "$OLD_DEPLOY" -depth -delete ;;
     esac
   fi
-  remove_index=$((remove_index + 1))
 done
 ```
 

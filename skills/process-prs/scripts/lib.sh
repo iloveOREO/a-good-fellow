@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # lib.sh — shared helpers sourced by the process-prs scripts. Not executable.
 # Callers set LIB_TOOL to their own name before sourcing so every message and
 # die() carries the right prefix. These validators guard the same values across

@@ -73,7 +73,7 @@ Classify each run by its final line:
 | `FATAL: no authenticated agent CLI` | agent credentials gone |
 | `missing/invalid good-fellow deployment` | launcher pointer or selected deployment is absent/corrupt |
 | `invalid GOOD_FELLOW_AGENT` | bad agent override in `~/.good-fellow/env` or cron environment |
-| `invalid GOOD_FELLOW_*` / `must be between` | malformed runtime/review-budget configuration |
+| `invalid GOOD_FELLOW_*` / `must be at least` | malformed runtime/review-budget configuration |
 | `done (status N)` with N≠0 | the agent itself errored — read the body of that log |
 
 ## 4. Red flags worth calling out
@@ -98,18 +98,21 @@ VERSION_RUNNER="$DEPLOY_DIR/run-good-fellow.sh"
   runner.
 - **Runner predates review-safety fixes.** The runner is stale if it lacks
   the `deployment-current` launcher protocol. Read the regular pointer, require it to
-  name `~/.good-fellow/deploy-*`, and inspect that deployment's version runner for
-  `GOOD_FELLOW_RUN_STOP_AT_EPOCH`, `GOOD_FELLOW_MIN_REVIEW_SECONDS`, and a prompt that
-  lists `process-prs` first and `reply-notifications` last. Also require the
-  deployment's `runtime/skills`, `runtime/docs`, executable `pr-queue.sh`,
-  `pr-handoff.sh`, and `notification-receipts.sh`. The Claude command must include
-  `--disable-slash-commands` and not allow the global `Skill` tool; the Codex command
-  must use the deployment's paired `CODEX_HOME`;
-  the PR guard must contain `snapshot_legacy_token`, the queue must contain
-  `ignoring malformed cursor`, and the handoff helper must contain
-  `ignoring invalid state file`. Missing agent-isolation flags can bypass the
-  immutable runtime through interactive skill symlinks; any other failure means the
-  scheduled code is stale or incomplete. Suggest re-running `/onboard`.
+  name `~/.good-fellow/deploy-*`, and require that deployment to carry a
+  `runtime-version` stamp file — onboard writes the deployed commit there exactly so
+  freshness is one comparison. A missing stamp means the deployment predates the
+  stamping protocol and is stale; when the local repository is available, a stamp
+  differing from its current HEAD means the deployment lags it (report which commit
+  is deployed rather than guessing severity). Also require the deployment's
+  `runtime/skills`, `runtime/docs`, and executable `pr-queue.sh`, `pr-handoff.sh`,
+  `pr-review-guard.sh`, `pr-inventory.sh`, and `notification-receipts.sh`. Two
+  content checks remain because they are security boundaries, not version probes:
+  the Claude command must include `--disable-slash-commands` and not allow the
+  global `Skill` tool, and the Codex command must use the deployment's paired
+  `CODEX_HOME` — missing isolation flags can bypass the immutable runtime through
+  interactive skill symlinks. Any failure means the scheduled code is stale or
+  incomplete: suggest re-running `/onboard`. Do not grep the runtime for
+  fix-specific strings; that list rots with every rename.
 - **Repeated timeouts.** Consistently hitting the limit means the workload no longer
   fits in one tick. Suggest raising `GOOD_FELLOW_MAX_RUNTIME` in `~/.good-fellow/env`
   or narrowing scope in the instruction gist. Current runners clamp values at or above
@@ -156,17 +159,18 @@ it. Report the effective review floor from `~/.good-fellow/env` or the version-r
 default.
 
 Use `show`; never parse handoff internals. At most one `reviewing` handoff may exist,
-because partial work holds the cursor and must resume before later deep work. Multiple
-`reviewed` handoffs are valid only transiently when a guarded outcome could not safely
-be attempted or confirmed. A completed clean review awaiting CI or mergeability must
-normally have a visible gate-waiting marker and no retained handoff; stable reviewed
-handoffs across later ticks indicate a stale runtime or failed submission path.
-A valid open handoff must appear in `queue-rows` even if GitHub search no longer lists
-that PR; otherwise continuation state has become orphaned from scheduling.
-A `reviewing` handoff and cursor unchanged across several sufficiently long successful
-ticks means work is stuck; a `reviewed` handoff is stale only when its PR gates have
-settled, or when its queue row recurred without a confirmed outcome/clear. Multiple `reviewing`
-handoffs indicate broken serial ownership.
+because partial work holds the cursor and must resume before later deep work; if two
+appear, `reviewing-key` self-heals by keeping the newest and deleting the rest, so a
+persisting pair means the deployed runtime predates that fix. A `reviewing` handoff
+plus an unchanged cursor across several sufficiently long successful ticks means work
+is stuck. For `reviewed` handoffs there is exactly one staleness rule: a `reviewed`
+handoff is healthy while a guarded outcome has not yet been safely attempted or
+confirmed, and stale once its PR's gates have settled or its queue row recurred
+without a confirmed outcome/clear — a completed clean review awaiting CI or
+mergeability should instead show a visible gate-waiting marker and no retained
+handoff. A valid open handoff must appear in `queue-rows` even if GitHub search no
+longer lists that PR; otherwise continuation state has become orphaned from
+scheduling.
 Routed `review_requested`, `assign`, and Discussion
 notifications may remain unread only while their open item still needs its owner
 sweep; a large pile of closed, merged, draft, unassigned, or no-longer-requested
