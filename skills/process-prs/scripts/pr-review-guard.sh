@@ -29,11 +29,9 @@ usage:
   pr-review-guard.sh base SNAPSHOT_FILE
   pr-review-guard.sh token SNAPSHOT_FILE
   pr-review-guard.sh legacy-token SNAPSHOT_FILE
-  pr-review-guard.sh receipt-token SNAPSHOT_FILE
   pr-review-guard.sh ledger SNAPSHOT_FILE
   pr-review-guard.sh ci-clean SNAPSHOT_FILE
   pr-review-guard.sh threads-clean SNAPSHOT_FILE
-  pr-review-guard.sh verify OWNER REPO NUMBER SNAPSHOT_FILE
   pr-review-guard.sh verify-external OWNER REPO NUMBER SNAPSHOT_FILE
   pr-review-guard.sh submit-comment OWNER REPO NUMBER SNAPSHOT_FILE BODY_FILE
   pr-review-guard.sh submit-approve OWNER REPO NUMBER SNAPSHOT_FILE BODY_FILE
@@ -142,14 +140,17 @@ QUERY='query($o:String!,$r:String!,$n:Int!){
           }
         }
       }
-      timelineItems(itemTypes:[REVIEW_DISMISSED_EVENT,REVIEW_REQUESTED_EVENT,REVIEW_REQUEST_REMOVED_EVENT],first:100){
+      dismissalEvents: timelineItems(itemTypes:[REVIEW_DISMISSED_EVENT],first:100){
+        pageInfo{hasNextPage}
+        nodes{... on ReviewDismissedEvent{
+          id createdAt dismissalMessage previousReviewState actor{login}
+          review{id author{login} state body commit{oid}}
+        }}
+      }
+      requestEvents: timelineItems(itemTypes:[REVIEW_REQUESTED_EVENT,REVIEW_REQUEST_REMOVED_EVENT],first:100){
         pageInfo{hasNextPage}
         nodes{
           __typename
-          ... on ReviewDismissedEvent{
-            id createdAt dismissalMessage previousReviewState actor{login}
-            review{id author{login} state body commit{oid}}
-          }
           ... on ReviewRequestedEvent{id createdAt requestedReviewer{... on User{login}}}
           ... on ReviewRequestRemovedEvent{id createdAt requestedReviewer{... on User{login}}}
         }
@@ -160,13 +161,13 @@ QUERY='query($o:String!,$r:String!,$n:Int!){
 
 # gh embeds gojq, so this adds no external jq dependency. The first five lines
 # are fixed metadata, lines six through eight are machine approval predicates, line
-# nine is stable external state, line ten is the complete review ledger, and line
-# eleven is the pre-stable-token external state accepted only for migration.
-# Lines nine and eleven are state-token hash inputs only: they deliberately strip
-# the viewer's own good-fellow:v1 marker reviews/comments so posting a marker does
-# not invalidate its own token. Idempotence and marker checks must read line ten
-# (the `ledger` subcommand); reading a filtered capture makes prior own reviews
-# invisible and causes duplicate reviews.
+# nine is the stable external-state token (a sha-256 digest), line ten is the
+# complete review ledger, and line eleven is the pre-stable-token digest accepted
+# only for migration. The token inputs deliberately strip the viewer's own
+# good-fellow:v1 marker reviews/comments so posting a marker does not invalidate
+# its own token; snapshot_state hashes those filtered captures before writing the
+# file, so only the digests exist on lines nine/eleven and the sole readable PR
+# JSON is the complete ledger on line ten (the `ledger` subcommand).
 FILTER='
 .data.viewer.login as $viewer |
 .data.repository as $repo |
@@ -180,7 +181,8 @@ elif $pr.reviews.pageInfo.hasNextPage then error("reviews exceed 100")
 elif $pr.comments.pageInfo.hasNextPage then error("issue comments exceed 100")
 elif $pr.reviewThreads.pageInfo.hasNextPage then error("review threads exceed 100")
 elif ([ $pr.reviewThreads.nodes[] | select(.comments.pageInfo.hasNextPage) ] | length) > 0 then error("a review thread exceeds 100 comments")
-elif $pr.timelineItems.pageInfo.hasNextPage then error("review dismissal/request events exceed 100")
+elif $pr.dismissalEvents.pageInfo.hasNextPage then error("review dismissal events exceed 100")
+elif $pr.requestEvents.pageInfo.hasNextPage then error("review request events exceed 100")
 elif (($pr.commits.nodes[0].commit.statusCheckRollup.contexts.pageInfo.hasNextPage // false)) then error("check contexts exceed 100")
 elif (($pr.potentialMergeCommit.statusCheckRollup.contexts.pageInfo.hasNextPage // false)) then error("merge-commit check contexts exceed 100")
 elif (($pr.potentialMergeCommit.parents.pageInfo.hasNextPage // false)) then error("test-merge commit has more than two parents")
@@ -281,7 +283,7 @@ else
         }
       ] | sort_by(.id)),
       reviewDismissals:([
-        $pr.timelineItems.nodes[] | select(.__typename == "ReviewDismissedEvent") |
+        $pr.dismissalEvents.nodes[] |
         {id,createdAt,dismissalMessage,previousReviewState,actor:(.actor.login // null),review:{id:.review.id,author:(.review.author.login // null),state:.review.state,body:.review.body,commit:(.review.commit.oid // null)}}
       ] | sort_by(.id))
     }
@@ -317,8 +319,8 @@ else
       (([ $pr.reviewRequests.nodes[].requestedReviewer | select(.__typename == "User" and .login == $viewer) ] | length) > 0)
       or
       (
-        ([ $pr.timelineItems.nodes[] | select(.__typename == "ReviewRequestedEvent" and (.requestedReviewer.login // "") == $viewer) | .createdAt ] | max // "") as $lastRequested |
-        ([ $pr.timelineItems.nodes[] | select(.__typename == "ReviewRequestRemovedEvent" and (.requestedReviewer.login // "") == $viewer) | .createdAt ] | max // "") as $lastRemoved |
+        ([ $pr.requestEvents.nodes[] | select(.__typename == "ReviewRequestedEvent" and (.requestedReviewer.login // "") == $viewer) | .createdAt ] | max // "") as $lastRequested |
+        ([ $pr.requestEvents.nodes[] | select(.__typename == "ReviewRequestRemovedEvent" and (.requestedReviewer.login // "") == $viewer) | .createdAt ] | max // "") as $lastRemoved |
         ($lastRequested != "") and ($lastRequested > $lastRemoved) and
         (([ $pr.reviews.nodes[] | select(
           (.author.login // "") == $viewer and
@@ -347,8 +349,7 @@ else
     ),
     (([ $pr.reviewThreads.nodes[] | select(.isResolved == false) ] | length) == 0),
     (
-      ([ $pr.timelineItems.nodes[] | select(
-        .__typename == "ReviewDismissedEvent" and
+      ([ $pr.dismissalEvents.nodes[] | select(
         (.review.author.login // "") == $viewer and
         (.review.commit.oid // "") == $pr.headRefOid and
         .previousReviewState == "APPROVED" and
@@ -465,10 +466,20 @@ snapshot_state() {
     fi
   fi
 
-  awk -v ci_clean="$ci_clean" '
-    NR == 6 { print ci_clean; next }
-    NR <= 11 { print }
-  ' "$SNAPSHOT_CORE_TEMP"
+  # Emit the 11-line snapshot. The filtered token inputs on internal lines 9/11
+  # are reduced to their sha-256 digests here so the only readable PR JSON in
+  # the file is the complete ledger on line 10 — a consumer can no longer grab
+  # a filtered capture by mistake.
+  local out_line line_no=0
+  while IFS= read -r out_line; do
+    line_no=$((line_no + 1))
+    [ "$line_no" -le 11 ] || break
+    case "$line_no" in
+      6) printf '%s\n' "$ci_clean" ;;
+      9|11) digest_string "$out_line" ;;
+      *) printf '%s\n' "$out_line" ;;
+    esac
+  done < "$SNAPSHOT_CORE_TEMP"
 }
 
 snapshot_line() {
@@ -503,13 +514,12 @@ snapshot_base() {
   printf '%s\n' "$value"
 }
 
-snapshot_digest_line() {
-  local payload token
-  payload=$(snapshot_line "$1" "$2")
+digest_string() {
+  local token
   if command -v sha256sum >/dev/null 2>&1; then
-    token=$(printf '%s' "$payload" | sha256sum | awk '{print $1}')
+    token=$(printf '%s' "$1" | sha256sum | awk '{print $1}')
   elif command -v shasum >/dev/null 2>&1; then
-    token=$(printf '%s' "$payload" | shasum -a 256 | awk '{print $1}')
+    token=$(printf '%s' "$1" | shasum -a 256 | awk '{print $1}')
   else
     die 'sha256sum or shasum is required'
   fi
@@ -518,16 +528,21 @@ snapshot_digest_line() {
   printf '%s\n' "$token"
 }
 
+# Lines 9/11 hold digests written by snapshot_state; validate shape and echo.
+snapshot_stored_token() {
+  local value
+  value=$(snapshot_line "$1" "$2")
+  case "$value" in ''|*[!0-9a-f]*) die 'invalid state token' ;; esac
+  [ "${#value}" -eq 64 ] || die 'invalid state token'
+  printf '%s\n' "$value"
+}
+
 snapshot_token() {
-  snapshot_digest_line "$1" 9
+  snapshot_stored_token "$1" 9
 }
 
 snapshot_legacy_token() {
-  snapshot_digest_line "$1" 11
-}
-
-snapshot_receipt_token() {
-  snapshot_digest_line "$1" 10
+  snapshot_stored_token "$1" 11
 }
 
 snapshot_ledger() {
@@ -536,12 +551,8 @@ snapshot_ledger() {
   snapshot_line "$1" 10
 }
 
-verify_state() {
-  # CI and synthetic merge state are live gates. Callers that need a clean
-  # outcome read the freshly captured predicates after this stable-state check.
-  verify_external_state "$@"
-}
-
+# CI and synthetic merge state are live gates. Callers that need a clean
+# outcome read the freshly captured predicates after this stable-state check.
 verify_external_state() {
   local owner=$1 repo=$2 number=$3 baseline=$4 status
   local old_head old_base old_token new_head new_base new_token
@@ -632,10 +643,6 @@ case "$mode" in
     [ "$#" -eq 2 ] || usage
     snapshot_legacy_token "$2"
     ;;
-  receipt-token)
-    [ "$#" -eq 2 ] || usage
-    snapshot_receipt_token "$2"
-    ;;
   ledger)
     [ "$#" -eq 2 ] || usage
     snapshot_ledger "$2"
@@ -647,11 +654,6 @@ case "$mode" in
   threads-clean)
     [ "$#" -eq 2 ] || usage
     snapshot_line "$2" 7
-    ;;
-  verify)
-    [ "$#" -eq 5 ] || usage
-    validate_target "$2" "$3" "$4"
-    verify_state "$2" "$3" "$4" "$5"
     ;;
   verify-external)
     [ "$#" -eq 5 ] || usage

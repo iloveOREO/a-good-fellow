@@ -90,8 +90,8 @@ REPO=${REPO_PATH#*/}
 HEAD=$("$GUARD" head "$COVERAGE_STATE")
 OBSERVATION=$("$RECEIPTS_TOOL" observe pr "$REPO_URL" "$NUMBER" "$THREAD_ID")
 IFS=$'\t' read -r OBSERVED LAST_READ <<< "$OBSERVATION"
-"$GUARD" verify "$OWNER" "$REPO" "$NUMBER" "$COVERAGE_STATE"
-PROOF=$("$GUARD" receipt-token "$COVERAGE_STATE")
+"$GUARD" verify-external "$OWNER" "$REPO" "$NUMBER" "$COVERAGE_STATE"
+PROOF=$("$GUARD" token "$COVERAGE_STATE")
 "$RECEIPTS_TOOL" record pr "$REPO_URL" "$NUMBER" "$THREAD_ID" \
   "$OBSERVED" "$LAST_READ" "$OUTCOME" "$HEAD" "$PROOF"
 "$QUEUE_TOOL" advance "$REPO_URL" "$NUMBER"
@@ -187,12 +187,10 @@ LEDGER=$("$GUARD" ledger "$PR_STATE")
 ```
 
 The snapshot must prove open/non-draft state and complete bounded connections; never
-fall back to a smaller query. Read its full ledger before any decision, and read it
-only through `"$GUARD" ledger` — never by pulling a JSON line out of the snapshot
-file directly. The snapshot's other JSON captures are state-token hash inputs that
-deliberately strip the authenticated user's own marker reviews/comments (so posting
-a marker does not invalidate its own token); using one of them for idempotence or
-marker checks makes every prior own review invisible and produces duplicate reviews. The durable
+fall back to a smaller query. Read its full ledger before any decision, through
+`"$GUARD" ledger` — it is the only PR JSON in the file. The state tokens are stored
+as digests of filtered captures that deliberately strip the authenticated user's own
+marker reviews/comments, so posting a marker does not invalidate its own token. The durable
 external token binds HEAD/base and review-relevant PR/conversation state, but excludes
 CI, `mergeable`, `mergeStateStatus`, and the synthetic `potentialMergeCommit`; those
 are re-read as live submission gates and never trigger a code rereview by themselves.
@@ -344,10 +342,12 @@ is insufficient or a guarded outcome cannot be confirmed. Never save an empty
 placeholder or call an unvisited item deferred.
 
 ```bash
-"$GUARD" verify-external "$OWNER" "$REPO" "$NUMBER" "$PR_STATE"
 "$HANDOFF_TOOL" save "$OWNER" "$REPO" "$NUMBER" "$PR_STATE" \
   reviewing "$HANDOFF_PAYLOAD"   # or: reviewed
 ```
+
+`save` verifies the snapshot against live external state itself; no separate
+`verify-external` call is needed first.
 
 ### Step 5 — Guarded outcome
 

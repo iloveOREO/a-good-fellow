@@ -221,8 +221,9 @@ Before acting on any PR, issue, thread, or discussion:
 - Owner sweeps record short-lived local receipts only after observing an exact
   notification thread/version and then re-reading the subject to prove they cover
   that version. `reply-notifications` runs last and accepts only an exact version
-  plus subject-proof match. PR proof binds HEAD and the guard's full `receipt-token`
-  (including requests, assignees, CI, and the complete ledger);
+  plus subject-proof match. PR proof binds HEAD and the guard's stable `token`
+  (review-relevant conversation state, deliberately excluding CI/mergeability so a
+  `ci-waiting` receipt still verifies after asynchronous check recomputation);
   Issue/Discussion proof hashes deterministic complete state including all paginated
   comments/replies. Without both, keep still-actionable open work unread; terminal or
   no-longer-owned work may be reconciled read from fresh state.

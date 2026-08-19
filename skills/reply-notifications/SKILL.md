@@ -90,8 +90,11 @@ A non-empty result is a helper-authored TSV row: type, repo URL, number, thread 
 notification `updated_at`/`last_read_at`, outcome, HEAD, subject proof, recorded time.
 Validate it, then
 prove the subject still matches its proof: for `pr`, capture a fresh `PR_GUARD`
-snapshot and require both its HEAD and `receipt-token` to equal the receipt. This
-full token includes review requests, assignees, CI, and the complete ledger. For `issue` and
+snapshot and require both its HEAD and stable `token` to equal the receipt. The
+stable token binds head/base and review-relevant conversation state while excluding
+CI, mergeability, and the synthetic merge commit — GitHub recomputes those
+asynchronously, so a `ci-waiting` receipt recorded during a running check must
+still verify at cleanup. For `issue` and
 `discussion`, call `"$RECEIPTS" subject-proof "$TYPE" "$REPO_URL" "$NUMBER"`.
 The helper performs the same complete, deterministic, double-captured digest used by
 the owner. Require an exact proof match.
