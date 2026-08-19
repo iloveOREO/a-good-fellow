@@ -30,21 +30,39 @@ Your standing preferences (language, tone, review taste, repo scope) live in a
 personal gist file `good-fellow-instruction.md`, cached at
 `~/.good-fellow/instruction.md` and applied to every task.
 
-## Keeping an eye on it
+## The skills
 
-Two skills are for you rather than for the schedule — run them any time:
+| Skill | Runs | Purpose |
+|---|---|---|
+| [`onboard`](skills/onboard/SKILL.md) | manual, once per machine | install, authenticate, schedule |
+| [`reply-notifications`](skills/reply-notifications/SKILL.md) | every sweep | triage unread notifications |
+| [`join-discussions`](skills/join-discussions/SKILL.md) | every sweep | answer Discussions that @mention you |
+| [`fix-assigned-issues`](skills/fix-assigned-issues/SKILL.md) | every sweep | fix issues assigned to you, open PRs |
+| [`process-prs`](skills/process-prs/SKILL.md) | every sweep | fix feedback on your PRs, review others' |
+| [`create-pr`](skills/create-pr/SKILL.md) | helper + manual | commit, push, open a PR |
+| [`check-status`](skills/check-status/SKILL.md) | manual | health of the automation |
+| [`sync-instructions`](skills/sync-instructions/SKILL.md) | manual | pull/edit/push your instruction gist |
 
-- **`/check-status`** — is a sweep running right now, is the cron job actually
-  firing, what did the recent runs do, and why did any of them fail. It reads the
-  lock, the crontab, and `~/.good-fellow/logs/`, then names the specific fix for
-  what it finds: a stuck lock holding up every tick, expired Claude or GitHub
-  credentials, runs hitting the time limit, cron not firing at all (on macOS,
-  usually Full Disk Access), or a runner generated before a fix landed. It only
-  reports — it won't change anything without asking.
-- **`/sync-instructions`** — pull the instruction gist into the local cache, or edit
-  your instructions and push them back. It diffs before overwriting either side, so
-  a local edit is never silently lost, and it creates the gist if you don't have one
-  yet.
+The four **sweep** skills are what the cron job runs, in the order listed, and they are
+built to need no human at all: no prompts, no confirmations, no "please do this part
+yourself". Obstacles are resolved by rules the agent can apply alone — recover leftover
+state, retry once, or skip and let the next tick try again — and safety comes from
+operations that fail safely rather than from asking first. `create-pr` is called by
+`fix-assigned-issues` to ship a fix, and is equally usable on its own.
+
+The three **manual** skills are for you, and none of them belongs in the cron job.
+`onboard` is the only one that changes machine setup. `/check-status` reads the lock,
+the crontab, and `~/.good-fellow/logs/`, then names the specific fix for whatever it
+finds — a stuck lock holding up every tick, expired Claude or GitHub credentials, runs
+hitting the time limit, cron not firing at all (on macOS, usually Full Disk Access), or
+a runner generated before a fix landed — and it changes nothing without asking.
+`/sync-instructions` pulls your instruction gist into the local cache or pushes edits
+back, diffing before it overwrites either side so a local edit is never silently lost,
+and creates the gist if you don't have one yet.
+
+Every skill obeys [`docs/conventions.md`](docs/conventions.md) — the shared rules on
+instruction handling, untrusted input, workspace isolation, the bot marker,
+idempotence, and unattended discipline.
 
 ## Install
 
