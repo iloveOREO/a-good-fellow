@@ -30,6 +30,7 @@ usage:
   pr-review-guard.sh token SNAPSHOT_FILE
   pr-review-guard.sh legacy-token SNAPSHOT_FILE
   pr-review-guard.sh receipt-token SNAPSHOT_FILE
+  pr-review-guard.sh ledger SNAPSHOT_FILE
   pr-review-guard.sh ci-clean SNAPSHOT_FILE
   pr-review-guard.sh threads-clean SNAPSHOT_FILE
   pr-review-guard.sh verify OWNER REPO NUMBER SNAPSHOT_FILE
@@ -156,6 +157,11 @@ QUERY='query($o:String!,$r:String!,$n:Int!){
 # are fixed metadata, lines six through eight are machine approval predicates, line
 # nine is stable external state, line ten is the complete review ledger, and line
 # eleven is the pre-stable-token external state accepted only for migration.
+# Lines nine and eleven are state-token hash inputs only: they deliberately strip
+# the viewer's own good-fellow:v1 marker reviews/comments so posting a marker does
+# not invalidate its own token. Idempotence and marker checks must read line ten
+# (the `ledger` subcommand); reading a filtered capture makes prior own reviews
+# invisible and causes duplicate reviews.
 FILTER='
 .data.viewer.login as $viewer |
 .data.repository as $repo |
@@ -501,6 +507,12 @@ snapshot_receipt_token() {
   snapshot_digest_line "$1" 10
 }
 
+snapshot_ledger() {
+  # The complete, unfiltered review ledger. This is the only capture safe for
+  # idempotence and marker checks; lines 9/11 strip the viewer's own markers.
+  snapshot_line "$1" 10
+}
+
 verify_state() {
   # CI and synthetic merge state are live gates. Callers that need a clean
   # outcome read the freshly captured predicates after this stable-state check.
@@ -600,6 +612,10 @@ case "$mode" in
   receipt-token)
     [ "$#" -eq 2 ] || usage
     snapshot_receipt_token "$2"
+    ;;
+  ledger)
+    [ "$#" -eq 2 ] || usage
+    snapshot_ledger "$2"
     ;;
   ci-clean)
     [ "$#" -eq 2 ] || usage

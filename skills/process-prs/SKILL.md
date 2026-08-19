@@ -183,18 +183,25 @@ PR_STATE=$(mktemp "${TMPDIR:-/tmp}/good-fellow-pr-state.XXXXXX")
 "$GUARD" snapshot "$OWNER" "$REPO" "$NUMBER" > "$PR_STATE"
 STATE_TOKEN=$("$GUARD" token "$PR_STATE")
 LEGACY_STATE_TOKEN=$("$GUARD" legacy-token "$PR_STATE")
+LEDGER=$("$GUARD" ledger "$PR_STATE")
 ```
 
 The snapshot must prove open/non-draft state and complete bounded connections; never
-fall back to a smaller query. Read its full ledger before any decision. The durable
+fall back to a smaller query. Read its full ledger before any decision, and read it
+only through `"$GUARD" ledger` — never by pulling a JSON line out of the snapshot
+file directly. The snapshot's other JSON captures are state-token hash inputs that
+deliberately strip the authenticated user's own marker reviews/comments (so posting
+a marker does not invalidate its own token); using one of them for idempotence or
+marker checks makes every prior own review invisible and produces duplicate reviews. The durable
 external token binds HEAD/base and review-relevant PR/conversation state, but excludes
 CI, `mergeable`, `mergeStateStatus`, and the synthetic `potentialMergeCommit`; those
 are re-read as live submission gates and never trigger a code rereview by themselves.
 
 ### Step 1 — Prefer current GitHub state over handoff
 
-Before loading a handoff, inspect every authenticated-user current-HEAD review/comment;
-foreign, edited, or minimized markers never count. A clean marker wins only when its
+Before loading a handoff, inspect every authenticated-user current-HEAD review/comment
+in the `"$GUARD" ledger` output (the filtered captures omit them by design); foreign,
+edited, or minimized markers never count. A clean marker wins only when its
 reviewed SHA/base and either stable or migration-only legacy token match, CI and
 threads are clean, no direct request remains, and an `action=approve` review still is
 approved and undismissed. A current-HEAD concern marker always suppresses the same
