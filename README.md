@@ -124,6 +124,36 @@ The agent that onboards you and the agent that runs the sweeps need not be the s
 the runner auto-detects claude → codex → cursor-agent at each tick, and
 `GOOD_FELLOW_AGENT=codex` in `~/.good-fellow/env` pins it to one.
 
+## Upgrading an already-onboarded machine
+
+`git pull` is necessary but **not sufficient**:
+
+```bash
+cd ~/a-good-fellow && git pull
+```
+
+- **Covered by the pull**: every already-installed skill, plus `docs/conventions.md`
+  and `AGENTS.md`. The installed skills are symlinks *into* this repo, not copies, so
+  updated instructions take effect immediately.
+- **Not covered**: a **newly added skill** has no symlink on that machine yet, so the
+  agent cannot see it; and `~/.good-fellow/run-good-fellow.sh` is a **generated copy**,
+  so fixes to the reference implementation in `skills/onboard/SKILL.md` never reach it
+  on their own.
+
+So after pulling, re-run the onboard skill — it is idempotent and doubles as the
+upgrade path:
+
+> Run the onboard skill in skills/onboard/SKILL.md
+
+It refreshes the symlinks (adding any new skills), regenerates the runner from the
+current reference, leaves an existing crontab entry alone, and re-runs the smoke test.
+Then **restart the agent session** so newly added skills appear as slash commands.
+
+Two notes: re-onboarding overwrites `~/.good-fellow/instruction.md` from the gist, so
+if that cache has local edits, push them first with `/sync-instructions`. And
+`/check-status` flags a runner that predates recent fixes, which is a good way to tell
+whether a machine still needs this.
+
 ## Layout
 
 ```
