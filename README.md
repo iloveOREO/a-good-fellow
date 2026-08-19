@@ -124,6 +124,10 @@ The agent that onboards you and the agent that runs the sweeps need not be the s
 the runner auto-detects claude → codex → cursor-agent at each tick, and
 `GOOD_FELLOW_AGENT=codex` in `~/.good-fellow/env` pins it to one.
 
+Already set up this machine and just want the latest changes? See
+[Upgrading an already-onboarded machine](#upgrading-an-already-onboarded-machine)
+below — a `git pull` alone is not enough.
+
 ## Upgrading an already-onboarded machine
 
 `git pull` is necessary but **not sufficient**:
@@ -141,11 +145,15 @@ cd ~/a-good-fellow && git pull
   on their own.
 
 So after pulling, re-run the onboard skill — it is idempotent and doubles as the
-upgrade path:
+upgrade path. On a machine that is already onboarded the slash command works:
 
-> Run the onboard skill in skills/onboard/SKILL.md
+```
+/onboard
+```
 
-It refreshes the symlinks (adding any new skills), regenerates the runner from the
+(If the session predates the install and does not recognize it, restart the agent, or
+ask it to "run the onboard skill in skills/onboard/SKILL.md".) It refreshes the
+symlinks (adding any new skills), regenerates the runner from the
 current reference, leaves an existing crontab entry alone, and re-runs the smoke test.
 Then **restart the agent session** so newly added skills appear as slash commands.
 
