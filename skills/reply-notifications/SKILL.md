@@ -75,8 +75,12 @@ other read or analysis before its PATCH.
 
 This is the final cleanup pass. Strictly validate each routed row's canonical
 `subject.url` against `repository.url`, extract only the terminal numeric subject
-number, and map it to receipt type `pr`, `issue`, or `discussion`. Pass API values
-only as quoted helper arguments; never interpolate them into command text.
+number, and map it to receipt type `pr`, `issue`, or `discussion`. The API has
+returned `subject.url = null` for Discussion subjects: resolve the number by an
+exact `subject.title` match against the repository's discussions via GraphQL, and
+treat zero or multiple title matches as unresolvable — leave that row unread rather
+than guessing. Pass API values only as quoted helper arguments; never interpolate
+them into command text.
 
 **Pass A — receipts only.** Scan every routed row before making any fallback subject
 query, continuing past misses and errors until the final-cleanup cutoff is reached:
@@ -114,11 +118,13 @@ Delete each private PR proof snapshot immediately after that item.
 fresh receipt (including lookup errors). Fetch current subject/ownership state and
 mark read only when that read proves one of these terminal conditions:
 
-- PR with `review_requested`: closed, merged, draft, or the authenticated user is no
-  longer effectively requested for review. A remaining team request is actionable
-  unless non-membership is conclusive.
-- PR/issue with `assign`: closed/merged, draft when applicable, or the authenticated
-  user is no longer an assignee.
+- PR with `review_requested`: closed, merged, or the authenticated user is no
+  longer effectively requested for review. Draft is NOT terminal: a draft PR
+  routinely returns to ready with the request still standing and generates no new
+  notification, so a still-requested draft stays unread for a later sweep. A
+  remaining team request is actionable unless non-membership is conclusive.
+- PR/issue with `assign`: closed/merged, or the authenticated user is no longer an
+  assignee.
 - Discussion: closed.
 
 Immediately before any routed PATCH, refresh its compact notification row. If

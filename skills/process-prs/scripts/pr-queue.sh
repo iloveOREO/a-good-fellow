@@ -17,6 +17,9 @@ usage() {
   exit 64
 }
 
+# URL-grammar twin of notification-receipts.sh validate_key: both key files in
+# the shared state dir and the sweeps reconcile against each other, so the
+# accepted key space must match. Update the twin together.
 validate_key() {
   local repo=$1 number=$2 rest owner name
   case "$repo" in https://api.github.com/repos/*/*) ;; *) printf 'pr-queue: invalid repository URL\n' >&2; return 64 ;; esac

@@ -97,13 +97,15 @@ result is proven in this order:
 ```bash
 OBSERVATION=$("$RECEIPTS" observe issue "$REPO_URL" <number> "$THREAD_ID")
 IFS=$'\t' read -r OBSERVED LAST_READ <<< "$OBSERVATION"
-PROOF_BEFORE=$("$RECEIPTS" subject-proof issue "$REPO_URL" <number>)
-# Now refetch the complete issue/comments and re-prove the outcome against that state.
+# Refetch the complete issue/comments, re-prove the outcome, then take one proof.
 SUBJECT_PROOF=$("$RECEIPTS" subject-proof issue "$REPO_URL" <number>)
-[ "$PROOF_BEFORE" = "$SUBJECT_PROOF" ] || continue
 "$RECEIPTS" record issue "$REPO_URL" <number> "$THREAD_ID" \
   "$OBSERVED" "$LAST_READ" <outcome> - "$SUBJECT_PROOF"
 ```
+
+One `subject-proof` call suffices: the helper already double-captures and compares
+internally, and `record` re-observes the notification version, which is what
+actually rejects a subject that moved meanwhile.
 
 - `fixed`: a user-authored open PR was verified to close this issue, or **create-pr**
   successfully opened such a PR.

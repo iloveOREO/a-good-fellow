@@ -23,13 +23,16 @@ Primary source: unread Discussion notifications with `reason` = `mention`:
 gh api /notifications --paginate --jq '.[] |
   select(.subject.type == "Discussion" and .reason == "mention") | {
     id, reason, updated_at,
-    subject:{type:.subject.type,url:.subject.url},
+    subject:{type:.subject.type,url:.subject.url,title:.subject.title},
     repository:{url:.repository.url}
   }'
 ```
 
 Use only these compact JSONL rows; never load the raw notification response in
-context.
+context. The API has returned `subject.url = null` for Discussion subjects: when it
+is null, resolve the discussion number by an exact `subject.title` match against the
+repository's discussions via GraphQL, and treat zero or multiple matches as
+unresolvable — skip the row rather than guessing.
 
 Supplement with search (catches mentions whose notification was already read):
 
@@ -84,13 +87,15 @@ and re-prove that the decision still covers its latest mention:
 ```bash
 OBSERVATION=$("$RECEIPTS" observe discussion "$REPO_URL" <number> "$THREAD_ID")
 IFS=$'\t' read -r OBSERVED LAST_READ <<< "$OBSERVATION"
-PROOF_BEFORE=$("$RECEIPTS" subject-proof discussion "$REPO_URL" <number>)
-# Re-read the full paginated thread and re-prove the outcome here.
+# Re-read the full paginated thread and re-prove the outcome, then take one proof.
 SUBJECT_PROOF=$("$RECEIPTS" subject-proof discussion "$REPO_URL" <number>)
-[ "$PROOF_BEFORE" = "$SUBJECT_PROOF" ] || continue
 "$RECEIPTS" record discussion "$REPO_URL" <number> "$THREAD_ID" \
   "$OBSERVED" "$LAST_READ" <outcome> - "$SUBJECT_PROOF"
 ```
+
+One `subject-proof` call suffices: the helper already double-captures and compares
+internally, and `record` re-observes the notification version, which is what
+actually rejects a thread that moved meanwhile.
 
 Use exactly `answered` or `no-response-needed` as classified above. Do not record
 failed replies, incomplete reads, needs-user cases, changed threads, or deferrals.

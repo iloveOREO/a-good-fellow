@@ -152,7 +152,10 @@ THREADS_CLEAN=$("$GUARD" threads-clean "$PR_STATE")
 | any | unresolved thread or latest feedback not ours | deep feedback work |
 
 For a concrete CI failure, inspect the failing job/log and its relationship to the
-diff. Fix a diff-caused failure; rerun an infrastructure/flake failure once; after the
+diff. `gh run view --log-failed` comes back empty for older or archived runs; when it
+does, fall back to `gh api "repos/<owner>/<repo>/actions/jobs/<job-databaseId>/logs" |
+tail -200` before concluding anything — an empty log is missing evidence, never proof
+of an infrastructure failure. Fix a diff-caused failure; rerun an infrastructure/flake failure once; after the
 same infrastructure failure repeats, comment with the step/log evidence. Never invent
 a code fix when the cause is unknown. Judge every unresolved reviewer/Copilot item on
 code: fix real issues, or reply with a concrete explanation; only then resolve it.
@@ -228,7 +231,11 @@ duplicate handoff, finalize `ci-waiting`, and advance without another comment or
 review. If the gate becomes clean while HEAD/base/token still match, treat the marker
 as exact-HEAD code coverage and route only the live approval/comment predicates; do
 not reread the diff. New external feedback or a marker state mismatch invalidates
-that reuse.
+that reuse for coverage purposes — but never post another waiting comment for the
+same still-live gate on the same HEAD/base: like concerns, a gate-waiting marker
+suppresses repeats of its own root cause, so conversation churn on a CI-stuck PR
+reviews only the delta and posts nothing when the delta needs no comment. A new
+waiting comment is justified only by a new HEAD/base or a different named gate.
 
 Treat an authenticated-user current-HEAD `APPROVED` review with **no marker** as
 legacy code coverage when the ledger proves it remains approved/undismissed, is

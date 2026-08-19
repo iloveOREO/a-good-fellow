@@ -34,6 +34,9 @@ usage() {
   exit 64
 }
 
+# Keep the URL grammar identical to pr-queue.sh validate_key: both key files in
+# the shared state dir, and reply-notifications reconciles against process-prs
+# coverage, so the accepted key space must match. Update the twin together.
 validate_key() {
   local rest owner name
   case "$1" in pr|issue|discussion) ;; *) printf 'notification-receipts: invalid type\n' >&2; return 64 ;; esac
@@ -105,6 +108,9 @@ capture_subject() {
   esac
 }
 
+# Digest scheme twin of pr-review-guard.sh digest_string: proofs and guard
+# tokens are cross-validated by each other's 64-hex checks, so a change to the
+# probe order, algorithm, or output shape must land in both.
 hash_file() {
   local value
   if command -v sha256sum >/dev/null 2>&1; then
@@ -146,10 +152,19 @@ case "$mode" in
       issue) subject_type=Issue; subject_url="$3/issues/$4" ;;
       discussion) subject_type=Discussion; subject_url="$3/discussions/$4" ;;
     esac
+    # The notifications API has returned subject.url = null for Discussion
+    # subjects; identity then rests on thread id + repository + type, and the
+    # caller is responsible for having resolved the discussion number from the
+    # subject title. A non-null URL must still match exactly.
+    if [ "$2" = discussion ]; then
+      url_mismatch='((.subject.url != null) and (.subject.url != "'"$subject_url"'"))'
+    else
+      url_mismatch='(.subject.url != "'"$subject_url"'")'
+    fi
     observe_filter='if ((.id|tostring) != "'"$5"'") or
       (.repository.url != "'"$3"'") or
       (.subject.type != "'"$subject_type"'") or
-      (.subject.url != "'"$subject_url"'")
+      '"$url_mismatch"'
       or (.unread != true) then error("notification identity/state mismatch")
       else [.updated_at,(.last_read_at // "-")] | @tsv end'
     observed=$(gh api "/notifications/threads/$5" --jq "$observe_filter")
@@ -196,44 +211,38 @@ case "$mode" in
     mv -f "$TEMP_FILE" "$RECEIPT_FILE"
     TEMP_FILE=''
     ;;
-  lookup)
+  lookup|consume)
     [ "$#" -eq 7 ] || usage
     validate_key "$2" "$3" "$4"
     validate_thread "$5"
     validate_updated_at "$6"
     if [ "$7" != - ]; then validate_updated_at "$7"; fi
+    # lookup and consume share one match predicate so a receipt that matches
+    # for reading always matches for deletion, and vice versa.
     rest=${3#https://api.github.com/repos/}
     receipt_owner=${rest%%/*}
     receipt_repo=${rest#*/}
     receipt_suffix="-$2-$receipt_owner-$receipt_repo-$4-$5.tsv"
     found=''
     for file in "$STATE_DIR"/notification-receipts-*"$receipt_suffix"; do
-      [ -f "$file" ] || continue
-      [ ! -L "$file" ] || continue
-      row=$(awk -F "$TAB" -v t="$2" -v r="$3" -v n="$4" -v i="$5" -v u="$6" -v l="$7" '$1==t && $2==r && $3==n && $4==i && $5==u && $6==l {print}' "$file" | tail -1)
-      [ -z "$row" ] || found=$row
-    done
-    [ -z "$found" ] || printf '%s\n' "$found"
-    ;;
-  consume)
-    [ "$#" -eq 7 ] || usage
-    validate_key "$2" "$3" "$4"
-    validate_thread "$5"
-    validate_updated_at "$6"
-    if [ "$7" != - ]; then validate_updated_at "$7"; fi
-    rest=${3#https://api.github.com/repos/}
-    receipt_owner=${rest%%/*}
-    receipt_repo=${rest#*/}
-    receipt_suffix="-$2-$receipt_owner-$receipt_repo-$4-$5.tsv"
-    for file in "$STATE_DIR"/notification-receipts-*"$receipt_suffix"; do
       [ -f "$file" ] && [ ! -L "$file" ] || continue
-      matching=$(awk -F "$TAB" -v t="$2" -v r="$3" -v n="$4" -v i="$5" -v u="$6" -v l="$7" '$1==t && $2==r && $3==n && $4==i && $5==u && $6==l {count++} END{print count+0}' "$file")
-      case "$matching" in
+      match_out=$(awk -F "$TAB" -v t="$2" -v r="$3" -v n="$4" -v i="$5" -v u="$6" -v l="$7" \
+        '$1==t && $2==r && $3==n && $4==i && $5==u && $6==l {count++; row=$0}
+         END {print count+0; if (count) print row}' "$file")
+      match_count=${match_out%%$'\n'*}
+      case "$match_count" in
         0) ;;
-        1) find "$file" -type f -delete ;;
+        1)
+          if [ "$mode" = consume ]; then
+            find "$file" -type f -delete
+          else
+            found=${match_out#*$'\n'}
+          fi
+          ;;
         *) printf 'notification-receipts: malformed duplicate receipt\n' >&2; exit 64 ;;
       esac
     done
+    [ "$mode" = consume ] || [ -z "$found" ] || printf '%s\n' "$found"
     ;;
   prune)
     [ "$#" -eq 1 ] || usage
