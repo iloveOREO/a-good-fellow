@@ -40,9 +40,11 @@ gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){
           checkSuite{ workflowRun{ databaseId workflow{ name } } } }
         ... on StatusContext{ context state } } } } } } }
     reviews(last:50){ nodes{ author{login} state submittedAt body } }
-    comments(last:50){ nodes{ author{login} createdAt body } }
+    comments(last:50){ nodes{ id author{login} createdAt body
+      reactionGroups{ content viewerHasReacted } } }
     reviewThreads(first:100){ nodes{ id isResolved isOutdated path
-      comments(first:50){ nodes{ author{login} body url createdAt } } } } } } }' \
+      comments(first:50){ nodes{ id author{login} body url createdAt
+        reactionGroups{ content viewerHasReacted } } } } } } } }' \
   -f o=<owner> -f r=<repo> -F n=<number>
 ```
 
@@ -117,6 +119,22 @@ on the commenter's confidence:
 - **Not a real issue** → reply with a concrete technical explanation of why (+ marker)
   and resolve the thread. Never dismiss without a reason.
 
+Mark every comment you individually judge here — real issue or not — as seen with a
+👀 reaction, unless its `reactionGroups` already shows `viewerHasReacted` for `EYES`
+(no need to react twice). This is separate from replying: the reply commits to a
+textual response, while the reaction is a cheap, immediate signal to the human that
+the bot has read *this specific* comment, and a durable one to the next sweep — via
+the same `reactionGroups` field in Step 1's query — that this exact comment has
+already been judged and does not need re-reading from scratch.
+
+```bash
+gh api graphql -f query='mutation($id:ID!){ addReaction(input:{subjectId:$id, content:EYES}){ reaction{ content } } }' -f id=<commentNodeId>
+```
+
+Only `IssueComment` and `PullRequestReviewComment` nodes are reactable — that's the
+flat `comments` list and every `reviewThreads[].comments` entry fetched above. Review
+summaries (the `reviews` list) are not reactable; skip those.
+
 ### Step 5 — Fix, push, then reply
 
 Check out the PR head **detached, from a private ref** (conventions §3). Do this
@@ -164,9 +182,11 @@ gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){
     isDraft author{login}
     commits(last:1){ nodes{ commit{ oid committedDate } } }
     reviews(last:50){ nodes{ author{login} state submittedAt body } }
-    comments(last:50){ nodes{ author{login} createdAt body } }
+    comments(last:50){ nodes{ id author{login} createdAt body
+      reactionGroups{ content viewerHasReacted } } }
     reviewThreads(first:100){ nodes{ isResolved isOutdated path
-      comments(first:20){ nodes{ author{login} createdAt body } } } } } } }' \
+      comments(first:20){ nodes{ id author{login} createdAt body
+        reactionGroups{ content viewerHasReacted } } } } } } } }' \
   -f o=<owner> -f r=<repo> -F n=<number>
 ```
 
@@ -205,6 +225,15 @@ differently, or reported on a different line of the same faulty logic, is still 
 duplicate. Do not repeat a point merely because you would have phrased it better, and
 never re-raise something already marked resolved unless the current code proves it was
 resolved incorrectly — in which case say explicitly that you are reopening it and why.
+
+While folding each concern into the ledger, react 👀 to its originating comment (the
+same `addReaction` mutation as §2A Step 4) unless `reactionGroups` already shows
+`viewerHasReacted` for `EYES`. We never reply to another reviewer's individual comment
+here — only Step 5's single PR-level comment touches the conversation — so the
+reaction is the only per-comment trace that this concern was actually read and folded
+into our decision. It gives humans visible confirmation the bot saw their comment, and
+lets a later sweep's Step 1 query tell at a glance which prior comments already went
+into a ledger, instead of re-deriving root causes from prose every time.
 
 ### Step 4 — Review the code
 
@@ -270,5 +299,6 @@ left behind (`git -C ~/<repo> worktree prune`) before finishing.
 Report per PR, and make the skipped ones countable — they are the point of the gates:
 CI fixed (with the failing step and pushed SHA), reruns triggered, threads
 fixed-and-resolved (links), threads dismissed with reasons, reviews posted
-(critical / LGTM / approved), and skipped with which gate matched (ready, waiting on
-author, CI still running, already reviewed and unchanged).
+(critical / LGTM / approved), comments marked seen (👀 count), and skipped with which
+gate matched (ready, waiting on author, CI still running, already reviewed and
+unchanged).
