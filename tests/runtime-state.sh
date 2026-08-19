@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT=$(CDPATH='' cd "$(dirname "$0")/.." && pwd -P)
+QUEUE="$ROOT/skills/process-prs/scripts/pr-queue.sh"
+HANDOFF="$ROOT/skills/process-prs/scripts/pr-handoff.sh"
+GUARD="$ROOT/skills/process-prs/scripts/pr-review-guard.sh"
+RECEIPTS="$ROOT/skills/reply-notifications/scripts/notification-receipts.sh"
+TEMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/good-fellow-runtime-test.XXXXXX")
+
+cleanup() {
+  case "$TEMP_ROOT" in
+    "${TMPDIR:-/tmp}"/good-fellow-runtime-test.*) find "$TEMP_ROOT" -depth -delete ;;
+    *) printf 'unsafe test temp path: %s\n' "$TEMP_ROOT" >&2 ;;
+  esac
+}
+trap cleanup EXIT
+
+fail() {
+  printf 'runtime-state test failed: %s\n' "$*" >&2
+  exit 1
+}
+
+assert_eq() {
+  [ "$1" = "$2" ] || fail "expected [$2], got [$1]"
+}
+
+# A malformed cursor is advisory state: ordering restarts deterministically and the
+# next successful advance will replace it.
+queue_state="$TEMP_ROOT/queue-state"
+mkdir -p "$queue_state"
+printf 'not-a-valid-cursor\n' > "$queue_state/process-prs.cursor"
+inventory="$TEMP_ROOT/inventory.tsv"
+printf '%s\n' \
+  $'https://api.github.com/repos/acme/app\t1\tauthor\thttps://github.com/acme/app/pull/1\tfalse' \
+  $'https://api.github.com/repos/acme/app\t2\tauthor\thttps://github.com/acme/app/pull/2\tfalse' \
+  > "$inventory"
+ordered=$(GOOD_FELLOW_STATE_DIR="$queue_state" "$QUEUE" order "$inventory" 2> "$TEMP_ROOT/queue.err")
+assert_eq "$(printf '%s\n' "$ordered" | sed -n '1p')" \
+  $'https://api.github.com/repos/acme/app\t1\tauthor\thttps://github.com/acme/app/pull/1\tfalse'
+grep -F 'ignoring malformed cursor' "$TEMP_ROOT/queue.err" >/dev/null || fail 'missing cursor recovery warning'
+
+# Collection operations skip one corrupt handoff instead of bricking the sweep or
+# the status command that is meant to diagnose it.
+handoff_state="$TEMP_ROOT/handoff-state"
+mkdir -p "$handoff_state"
+printf 'truncated\n' > "$handoff_state/process-prs-handoff-bad.state"
+for mode in show reviewing-key queue-rows prune; do
+  GOOD_FELLOW_STATE_DIR="$handoff_state" "$HANDOFF" "$mode" \
+    > "$TEMP_ROOT/handoff-$mode.out" 2> "$TEMP_ROOT/handoff-$mode.err" ||
+    fail "handoff $mode rejected the complete collection"
+done
+grep -F 'ignoring invalid state file' "$TEMP_ROOT/handoff-show.err" >/dev/null ||
+  fail 'missing corrupt handoff warning'
+
+# Draft PRs intentionally advance without receipts; reject an implementation that
+# accidentally records draft coverage.
+proof=$(printf '%064d' 0 | tr 0 a)
+set +e
+GOOD_FELLOW_STATE_DIR="$TEMP_ROOT/receipt-state" \
+  "$RECEIPTS" record pr https://api.github.com/repos/acme/app 1 1 \
+  2026-08-19T00:00:00Z - draft - "$proof" \
+  > "$TEMP_ROOT/receipt.out" 2> "$TEMP_ROOT/receipt.err"
+receipt_status=$?
+set -e
+assert_eq "$receipt_status" 64
+grep -F 'invalid covered outcome' "$TEMP_ROOT/receipt.err" >/dev/null ||
+  fail 'draft receipt failed for the wrong reason'
+
+receipt_state="$TEMP_ROOT/receipt-prune"
+mkdir -p "$receipt_state"
+old_receipt="$receipt_state/notification-receipts-old-pr-acme-app-1-1.tsv"
+new_receipt="$receipt_state/notification-receipts-new-pr-acme-app-1-2.tsv"
+printf 'old\n' > "$old_receipt"
+printf 'new\n' > "$new_receipt"
+touch -t 202001010000 "$old_receipt"
+GOOD_FELLOW_STATE_DIR="$receipt_state" "$RECEIPTS" prune
+[ ! -e "$old_receipt" ] || fail 'old receipt survived the one-day prune window'
+[ -f "$new_receipt" ] || fail 'fresh receipt was pruned'
+
+# Stub only the GitHub transport. The guard still parses and validates its real
+# snapshot/body formats. The second capture changes full CI state while preserving
+# stable external state, proving waiting submissions do not spin on active CI.
+stub_bin="$TEMP_ROOT/bin"
+mkdir -p "$stub_bin"
+cat > "$stub_bin/gh" <<'GH_STUB'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if [ "${1:-}" = api ] && [ "${2:-}" = graphql ]; then
+  count=0
+  [ ! -f "$STUB_COUNT_FILE" ] || count=$(cat "$STUB_COUNT_FILE")
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$STUB_COUNT_FILE"
+  ci=false
+  if [ "${STUB_MODE:-waiting}" = approval ] && [ "$count" -ge 2 ]; then ci=true; fi
+  printf '%s\n' \
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    reviewer \
+    true \
+    author \
+    "$ci" \
+    true \
+    true \
+    '{"pullRequest":{"stable":"same"}}' \
+    "{\"pullRequest\":{\"ciVersion\":$count}}" \
+    "{\"pullRequest\":{\"legacyMergeVersion\":$count}}" \
+    false \
+    -
+  exit 0
+fi
+
+if [ "${1:-}" = api ]; then
+  printf '%s\n' "$*" >> "$STUB_POST_LOG"
+  exit 0
+fi
+
+printf 'unexpected gh invocation\n' >&2
+exit 64
+GH_STUB
+chmod +x "$stub_bin/gh"
+export PATH="$stub_bin:$PATH"
+export STUB_COUNT_FILE="$TEMP_ROOT/gh-count"
+export STUB_POST_LOG="$TEMP_ROOT/gh-posts"
+
+make_marker_body() {
+  local snapshot=$1 action=$2 verdict=$3 output=$4 first_line=$5
+  local head base token
+  head=$("$GUARD" head "$snapshot")
+  base=$("$GUARD" base "$snapshot")
+  token=$("$GUARD" token "$snapshot")
+  printf '%s\n\n<!-- good-fellow:v1 reviewed=%s base=%s state=%s action=%s verdict=%s -->\n' \
+    "$first_line" "$head" "$base" "$token" "$action" "$verdict" > "$output"
+}
+
+export STUB_MODE=waiting
+printf '0\n' > "$STUB_COUNT_FILE"
+: > "$STUB_POST_LOG"
+waiting_snapshot="$TEMP_ROOT/waiting.snapshot"
+waiting_body="$TEMP_ROOT/waiting.body"
+"$GUARD" snapshot owner repo 1 > "$waiting_snapshot"
+make_marker_body "$waiting_snapshot" comment waiting "$waiting_body" \
+  '当前 HEAD 审查完成；CI 仍在运行，因此暂不批准。'
+"$GUARD" verify owner repo 1 "$waiting_snapshot" > "$TEMP_ROOT/waiting.verify"
+grep -Fx fresh "$TEMP_ROOT/waiting.verify" >/dev/null || fail 'stable verify rejected CI-only drift'
+"$GUARD" submit-comment owner repo 1 "$waiting_snapshot" "$waiting_body" \
+  > "$TEMP_ROOT/waiting.submit"
+grep -F 'event=COMMENT' "$STUB_POST_LOG" >/dev/null || fail 'waiting comment was not submitted'
+
+# Clean gates are evaluated from the fresh capture, not the stale baseline. This
+# baseline is CI=false and the submission capture is CI=true.
+export STUB_MODE=approval
+printf '0\n' > "$STUB_COUNT_FILE"
+: > "$STUB_POST_LOG"
+approval_snapshot="$TEMP_ROOT/approval.snapshot"
+approval_body="$TEMP_ROOT/approval.body"
+"$GUARD" snapshot owner repo 1 > "$approval_snapshot"
+assert_eq "$("$GUARD" ci-clean "$approval_snapshot")" false
+make_marker_body "$approval_snapshot" approve clean "$approval_body" \
+  'LGTM — 已检查当前 HEAD 的关键行为与失败边界。'
+"$GUARD" submit-approve owner repo 1 "$approval_snapshot" "$approval_body" \
+  > "$TEMP_ROOT/approval.submit"
+grep -F 'event=APPROVE' "$STUB_POST_LOG" >/dev/null || fail 'fresh clean approval was not submitted'
+
+# A handoff written with the previous token schema remains resumable while its
+# HEAD/base and legacy external state still match the captured snapshot.
+export STUB_MODE=waiting
+printf '0\n' > "$STUB_COUNT_FILE"
+legacy_snapshot="$TEMP_ROOT/legacy.snapshot"
+"$GUARD" snapshot owner repo 1 > "$legacy_snapshot"
+legacy_token=$("$GUARD" legacy-token "$legacy_snapshot")
+legacy_head=$("$GUARD" head "$legacy_snapshot")
+legacy_base=$("$GUARD" base "$legacy_snapshot")
+legacy_payload='{}'
+legacy_size=${#legacy_payload}
+legacy_state="$TEMP_ROOT/legacy-state"
+mkdir -p "$legacy_state"
+legacy_file="$legacy_state/process-prs-handoff-5-owner-4-repo-1.state"
+printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
+  good-fellow-pr-handoff-v1 owner repo 1 "$legacy_head" "$legacy_base" \
+  "$legacy_token" reviewed "$legacy_size" "$legacy_payload" > "$legacy_file"
+legacy_phase=$(GOOD_FELLOW_STATE_DIR="$legacy_state" "$HANDOFF" match owner repo 1 "$legacy_snapshot")
+assert_eq "$legacy_phase" reviewed
+
+migrate_state="$TEMP_ROOT/migrate-state"
+mkdir -p "$migrate_state"
+migrate_file="$migrate_state/process-prs-handoff-5-owner-4-repo-1.state"
+migrate_token=$(printf '%064d' 0 | tr 0 c)
+printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
+  good-fellow-pr-handoff-v1 owner repo 1 "$legacy_head" "$legacy_base" \
+  "$migrate_token" reviewed "$legacy_size" "$legacy_payload" > "$migrate_file"
+migrate_phase=$(GOOD_FELLOW_STATE_DIR="$migrate_state" "$HANDOFF" match owner repo 1 "$legacy_snapshot")
+assert_eq "$migrate_phase" reviewed-migrate
+
+# Exercise the exact runner embedded in onboard with legacy 1800-second settings.
+# Stubbed CLIs keep this test offline while proving both values clamp and the run
+# still reaches its dry-run sentinel.
+runner_home="$TEMP_ROOT/runner-home"
+runner_deploy="$runner_home/.good-fellow/candidate"
+mkdir -p "$runner_deploy/runtime/skills" "$runner_deploy/runtime/docs" \
+  "$runner_home/.local/bin"
+runner="$runner_deploy/run-good-fellow.sh"
+awk '/^# good-fellow version runner — generated by the onboard skill\.$/ {
+       print "#!/usr/bin/env bash"; print; emit=1; next
+     }
+     emit && /^```$/ {exit}
+     emit {print}' "$ROOT/skills/onboard/SKILL.md" > "$runner"
+cat > "$runner_home/.local/bin/gh" <<'GH_AUTH_STUB'
+#!/usr/bin/env bash
+exit 0
+GH_AUTH_STUB
+cat > "$runner_home/.local/bin/claude" <<'CLAUDE_STUB'
+#!/usr/bin/env bash
+printf 'good-fellow dry run ok.\n'
+CLAUDE_STUB
+chmod +x "$runner" "$runner_home/.local/bin/gh" "$runner_home/.local/bin/claude"
+runner_output=$(HOME="$runner_home" CLAUDE_CODE_OAUTH_TOKEN=test \
+  GOOD_FELLOW_DRY_RUN=1 GOOD_FELLOW_MAX_RUNTIME=1800 \
+  GOOD_FELLOW_MIN_REVIEW_SECONDS=1800 "$runner" 2>&1)
+printf '%s\n' "$runner_output" | grep -F 'clamping to 1799' >/dev/null ||
+  fail 'legacy max runtime was not clamped'
+printf '%s\n' "$runner_output" | grep -F 'clamping to 1679' >/dev/null ||
+  fail 'oversized review floor was not clamped'
+printf '%s\n' "$runner_output" | grep -Fx 'good-fellow dry run ok.' >/dev/null ||
+  fail 'clamped runner did not reach the dry-run sentinel'
+printf '%s\n' "$runner_output" | grep -F 'done (status 0)' >/dev/null ||
+  fail 'clamped runner did not finish cleanly'
+
+# Run the exact deployment-retention block from onboard against controlled names.
+for suffix in 1 2 3 4 5; do
+  mkdir -p "$runner_home/.good-fellow/deploy-$suffix"
+done
+retention="$TEMP_ROOT/retention.sh"
+awk '/^KEEP_DEPLOYMENTS=3$/ {emit=1}
+     emit && /^```$/ {exit}
+     emit {print}' "$ROOT/skills/onboard/SKILL.md" > "$retention"
+HOME="$runner_home" bash "$retention"
+deploy_count=0
+for retained in "$runner_home/.good-fellow"/deploy-*; do
+  [ -d "$retained" ] && [ ! -L "$retained" ] || continue
+  deploy_count=$((deploy_count + 1))
+done
+assert_eq "$deploy_count" 3
+[ -d "$runner_home/.good-fellow/deploy-3" ] || fail 'retention removed a newest deployment'
+[ -d "$runner_home/.good-fellow/deploy-4" ] || fail 'retention removed a newest deployment'
+[ -d "$runner_home/.good-fellow/deploy-5" ] || fail 'retention removed a newest deployment'
+
+printf 'runtime state tests passed\n'

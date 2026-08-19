@@ -38,10 +38,22 @@ case "$mode" in
       priority_repo=$3
       priority_number=$4
     fi
-    if [ -f "$CURSOR_FILE" ] && [ ! -L "$CURSOR_FILE" ]; then
-      IFS=$'\t' read -r cursor_repo cursor_number extra < "$CURSOR_FILE" || true
-      [ -z "${extra:-}" ] || { printf 'pr-queue: malformed cursor\n' >&2; exit 64; }
-      validate_key "$cursor_repo" "$cursor_number"
+    if [ -e "$CURSOR_FILE" ] || [ -L "$CURSOR_FILE" ]; then
+      cursor_valid=true
+      if [ -f "$CURSOR_FILE" ] && [ ! -L "$CURSOR_FILE" ]; then
+        IFS=$'\t' read -r cursor_repo cursor_number extra < "$CURSOR_FILE" || true
+        [ -z "${extra:-}" ] || cursor_valid=false
+        if [ "$cursor_valid" = true ] && ! validate_key "$cursor_repo" "$cursor_number" >/dev/null 2>&1; then
+          cursor_valid=false
+        fi
+      else
+        cursor_valid=false
+      fi
+      if [ "$cursor_valid" != true ]; then
+        printf 'pr-queue: ignoring malformed cursor; restarting deterministic order\n' >&2
+        cursor_repo=''
+        cursor_number=''
+      fi
     fi
     LC_ALL=C sort -t "$TAB" -k1,1 -k2,2n "$inventory" | awk -F "$TAB" -v cr="$cursor_repo" -v cn="$cursor_number" -v pr="$priority_repo" -v pn="$priority_number" '
       function key(repo, number) { return repo "\t" sprintf("%020d", number) }

@@ -28,6 +28,7 @@ usage:
   pr-review-guard.sh head SNAPSHOT_FILE
   pr-review-guard.sh base SNAPSHOT_FILE
   pr-review-guard.sh token SNAPSHOT_FILE
+  pr-review-guard.sh legacy-token SNAPSHOT_FILE
   pr-review-guard.sh receipt-token SNAPSHOT_FILE
   pr-review-guard.sh ci-clean SNAPSHOT_FILE
   pr-review-guard.sh threads-clean SNAPSHOT_FILE
@@ -71,7 +72,7 @@ validate_snapshot_file() {
   local lines
   validate_regular_file "$1" 'snapshot file'
   lines=$(wc -l < "$1" | tr -d ' ')
-  [ "$lines" -eq 10 ] || die "snapshot must contain exactly 10 lines, found $lines"
+  [ "$lines" -eq 11 ] || die "snapshot must contain exactly 11 lines, found $lines"
 }
 
 QUERY='query($o:String!,$r:String!,$n:Int!){
@@ -153,7 +154,8 @@ QUERY='query($o:String!,$r:String!,$n:Int!){
 
 # gh embeds gojq, so this adds no external jq dependency. The first five lines
 # are fixed metadata, lines six through eight are machine approval predicates, line
-# nine is the external state, and line ten is the complete review ledger.
+# nine is stable external state, line ten is the complete review ledger, and line
+# eleven is the pre-stable-token external state accepted only for migration.
 FILTER='
 .data.viewer.login as $viewer |
 .data.repository as $repo |
@@ -286,6 +288,11 @@ else
     | .pullRequest.reviewThreads |= map(.comments |= map(select((.author != $viewer) or (((.body // "") | contains("good-fellow:v1")) | not))))
     | .pullRequest.comments |= map(.seen = false)
     | .pullRequest.reviewThreads |= map(.comments |= map(.seen = false))
+  ) as $legacy_external |
+  (
+    $legacy_external
+    | .pullRequest.mergeable = null
+    | .pullRequest.potentialMergeCommit = null
   ) as $external |
   ([
     $pr.headRefOid,
@@ -298,9 +305,17 @@ else
       $pr.potentialMergeCommit != null and
       $pr.potentialMergeCommit.parents.totalCount == 2 and
       (([ $pr.potentialMergeCommit.parents.nodes[].oid ] | sort) == ([ $pr.baseRefOid, $pr.headRefOid ] | sort)) and
-      (($pr.commits.nodes[0].commit.statusCheckRollup == null) or ($pr.commits.nodes[0].commit.statusCheckRollup.state == "SUCCESS")) and
-      $pr.potentialMergeCommit.statusCheckRollup != null and
-      $pr.potentialMergeCommit.statusCheckRollup.state == "SUCCESS"
+      (
+        (
+          $pr.commits.nodes[0].commit.statusCheckRollup == null and
+          $pr.potentialMergeCommit.statusCheckRollup == null
+        ) or
+        (
+          (($pr.commits.nodes[0].commit.statusCheckRollup == null) or ($pr.commits.nodes[0].commit.statusCheckRollup.state == "SUCCESS")) and
+          $pr.potentialMergeCommit.statusCheckRollup != null and
+          $pr.potentialMergeCommit.statusCheckRollup.state == "SUCCESS"
+        )
+      )
     ),
     (([ $pr.reviewThreads.nodes[] | select(.isResolved == false) ] | length) == 0),
     (
@@ -316,6 +331,7 @@ else
     ),
     $external,
     $full,
+    $legacy_external,
     (
       $pr.mergeable == "MERGEABLE" and
       $pr.potentialMergeCommit != null and
@@ -353,12 +369,12 @@ snapshot_state() {
   fi
 
   lines=$(wc -l < "$SNAPSHOT_CORE_TEMP" | tr -d ' ')
-  [ "$lines" -eq 12 ] || die "internal snapshot must contain exactly 12 lines, found $lines"
+  [ "$lines" -eq 13 ] || die "internal snapshot must contain exactly 13 lines, found $lines"
   head=$(sed -n '1p' "$SNAPSHOT_CORE_TEMP")
   base=$(sed -n '2p' "$SNAPSHOT_CORE_TEMP")
   strict_clean=$(sed -n '6p' "$SNAPSHOT_CORE_TEMP")
-  fallback_eligible=$(sed -n '11p' "$SNAPSHOT_CORE_TEMP")
-  pairs=$(sed -n '12p' "$SNAPSHOT_CORE_TEMP")
+  fallback_eligible=$(sed -n '12p' "$SNAPSHOT_CORE_TEMP")
+  pairs=$(sed -n '13p' "$SNAPSHOT_CORE_TEMP")
   validate_oid "$head" 'snapshot head'
   validate_oid "$base" 'snapshot base'
   case "$strict_clean" in true|false) ;; *) die 'invalid strict CI predicate' ;; esac
@@ -422,7 +438,7 @@ snapshot_state() {
 
   awk -v ci_clean="$ci_clean" '
     NR == 6 { print ci_clean; next }
-    NR <= 10 { print }
+    NR <= 11 { print }
   ' "$SNAPSHOT_CORE_TEMP"
 }
 
@@ -477,28 +493,18 @@ snapshot_token() {
   snapshot_digest_line "$1" 9
 }
 
+snapshot_legacy_token() {
+  snapshot_digest_line "$1" 11
+}
+
 snapshot_receipt_token() {
   snapshot_digest_line "$1" 10
 }
 
 verify_state() {
-  local owner=$1 repo=$2 number=$3 baseline=$4 status
-  snapshot_head "$baseline" >/dev/null
-  umask 077
-  VERIFY_TEMP=$(mktemp "${TMPDIR:-/tmp}/good-fellow-pr-state.XXXXXX")
-  if snapshot_state "$owner" "$repo" "$number" > "$VERIFY_TEMP"; then
-    :
-  else
-    status=$?
-    printf 'pr-review-guard: unable to refresh pull request state\n' >&2
-    return "$status"
-  fi
-  if cmp -s "$baseline" "$VERIFY_TEMP"; then
-    printf 'fresh\n'
-    return 0
-  fi
-  printf 'pr-review-guard: pull request state changed during review\n' >&2
-  return 3
+  # CI and synthetic merge state are live gates. Callers that need a clean
+  # outcome read the freshly captured predicates after this stable-state check.
+  verify_external_state "$@"
 }
 
 verify_external_state() {
@@ -587,6 +593,10 @@ case "$mode" in
     [ "$#" -eq 2 ] || usage
     snapshot_token "$2"
     ;;
+  legacy-token)
+    [ "$#" -eq 2 ] || usage
+    snapshot_legacy_token "$2"
+    ;;
   receipt-token)
     [ "$#" -eq 2 ] || usage
     snapshot_receipt_token "$2"
@@ -616,14 +626,23 @@ case "$mode" in
     copy_submit_inputs "$5" "$6"
     if [ "$mode" = submit-approve ]; then action=approve; else action=comment; fi
     validate_body "$SUBMIT_SNAPSHOT_TEMP" "$SUBMIT_BODY_TEMP" "$action"
-    head=$(snapshot_head "$SUBMIT_SNAPSHOT_TEMP")
+    # Review coverage is bound to HEAD/base/external conversation state. CI and
+    # GitHub's synthetic merge commit are deliberately live gates, not durable
+    # review identity: they may change while a waiting comment is being posted.
+    if verify_external_state "$2" "$3" "$4" "$SUBMIT_SNAPSHOT_TEMP" >/dev/null; then
+      :
+    else
+      status=$?
+      exit "$status"
+    fi
+    head=$(snapshot_head "$VERIFY_TEMP")
     if [ "$mode" = submit-approve ]; then
-      viewer=$(snapshot_line "$SUBMIT_SNAPSHOT_TEMP" 3)
-      requested=$(snapshot_line "$SUBMIT_SNAPSHOT_TEMP" 4)
-      author=$(snapshot_line "$SUBMIT_SNAPSHOT_TEMP" 5)
-      ci_clean=$(snapshot_line "$SUBMIT_SNAPSHOT_TEMP" 6)
-      threads_clean=$(snapshot_line "$SUBMIT_SNAPSHOT_TEMP" 7)
-      dismissal_clear=$(snapshot_line "$SUBMIT_SNAPSHOT_TEMP" 8)
+      viewer=$(snapshot_line "$VERIFY_TEMP" 3)
+      requested=$(snapshot_line "$VERIFY_TEMP" 4)
+      author=$(snapshot_line "$VERIFY_TEMP" 5)
+      ci_clean=$(snapshot_line "$VERIFY_TEMP" 6)
+      threads_clean=$(snapshot_line "$VERIFY_TEMP" 7)
+      dismissal_clear=$(snapshot_line "$VERIFY_TEMP" 8)
       [ "$viewer" != "$author" ] || die 'cannot approve a pull request authored by the viewer'
       [ "$requested" = true ] || die 'viewer is not a directly requested reviewer'
       [ "$BODY_VERDICT" = clean ] || die 'approval requires verdict=clean'
@@ -631,20 +650,14 @@ case "$mode" in
       [ "$threads_clean" = true ] || die 'one or more review threads are unresolved'
       [ "$dismissal_clear" = true ] || die 'a current-head approval was dismissed and not superseded'
     elif [ "$BODY_VERDICT" = clean ]; then
-      requested=$(snapshot_line "$SUBMIT_SNAPSHOT_TEMP" 4)
-      ci_clean=$(snapshot_line "$SUBMIT_SNAPSHOT_TEMP" 6)
-      threads_clean=$(snapshot_line "$SUBMIT_SNAPSHOT_TEMP" 7)
-      dismissal_clear=$(snapshot_line "$SUBMIT_SNAPSHOT_TEMP" 8)
+      requested=$(snapshot_line "$VERIFY_TEMP" 4)
+      ci_clean=$(snapshot_line "$VERIFY_TEMP" 6)
+      threads_clean=$(snapshot_line "$VERIFY_TEMP" 7)
+      dismissal_clear=$(snapshot_line "$VERIFY_TEMP" 8)
       [ "$requested" = false ] || die 'directly requested clean review must use submit-approve'
       [ "$ci_clean" = true ] || die 'clean comment requires conclusively successful CI'
       [ "$threads_clean" = true ] || die 'clean comment requires all review threads resolved'
       [ "$dismissal_clear" = true ] || die 'clean comment cannot override a current-head dismissed approval'
-    fi
-    if verify_state "$2" "$3" "$4" "$SUBMIT_SNAPSHOT_TEMP" >/dev/null; then
-      :
-    else
-      status=$?
-      exit "$status"
     fi
     if enforce_stop_epoch; then :; else status=$?; exit "$status"; fi
     # No GitHub or code reads are allowed between the successful verification

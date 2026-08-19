@@ -199,6 +199,9 @@ Requirements the generated script must satisfy:
 - **Claude invocation**: do NOT use `--dangerously-skip-permissions` (claude refuses
   it when running as root); pre-authorize tools with `--allowedTools` instead.
 - **Timeout**: default 1500s so a run always ends before the next 30-minute tick.
+  Preserve older `1800`-second configurations by clamping any value at or above the
+  cadence to 1799 with a warning instead of bricking every scheduled run. Clamp an
+  oversized review floor to the resulting cleanup-safe maximum for the same reason.
 - **Review priority and deadline**: run `process-prs` first, then the other owner
   sweeps, and run `reply-notifications` last so it can consume their receipts and
   clear only work they actually covered. Export absolute run and stop epochs, and
@@ -214,6 +217,8 @@ Requirements the generated script must satisfy:
   auth file may point at the user's credential). Never let scheduled agents resolve
   the interactive skill symlinks in `~/.claude/skills` or `~/.codex/skills`.
 - **Log rotation**: delete logs in `~/.good-fellow/logs` older than 14 days.
+- **Deployment retention**: after a new pointer is published and verified, retain the
+  three newest real `deploy-*` directories and remove older immutable deployments.
 
 Materialize the deployment before writing its runner. Execute this publication flow
 with `set -e`; any failed copy, comparison, executable check, syntax check, or rename
@@ -246,6 +251,8 @@ for script in "$RUNTIME_DIR"/skills/*/scripts/*.sh; do
   [ -f "$script" ] || continue
   bash -n "$script"
 done
+test -x <REPO_ROOT>/tests/runtime-state.sh
+<REPO_ROOT>/tests/runtime-state.sh
 test -d "$DEPLOY_DIR/codex-home/skills"
 ```
 
@@ -265,8 +272,18 @@ MAX_RUNTIME="${GOOD_FELLOW_MAX_RUNTIME:-1500}"
 GOOD_FELLOW_MIN_REVIEW_SECONDS="${GOOD_FELLOW_MIN_REVIEW_SECONDS:-480}"
 case "$MAX_RUNTIME" in ''|0[0-9]*|*[!0-9]*) printf 'invalid GOOD_FELLOW_MAX_RUNTIME\n' >&2; exit 64 ;; esac
 case "$GOOD_FELLOW_MIN_REVIEW_SECONDS" in ''|0[0-9]*|*[!0-9]*) printf 'invalid GOOD_FELLOW_MIN_REVIEW_SECONDS\n' >&2; exit 64 ;; esac
-[ "$MAX_RUNTIME" -gt 180 ] && [ "$MAX_RUNTIME" -lt 1800 ] || { printf 'GOOD_FELLOW_MAX_RUNTIME must be between 181 and 1799 seconds\n' >&2; exit 64; }
-[ "$GOOD_FELLOW_MIN_REVIEW_SECONDS" -ge 60 ] && [ "$GOOD_FELLOW_MIN_REVIEW_SECONDS" -le $((MAX_RUNTIME - 120)) ] || { printf 'GOOD_FELLOW_MIN_REVIEW_SECONDS must be between 60 and MAX_RUNTIME-120\n' >&2; exit 64; }
+[ "$MAX_RUNTIME" -gt 180 ] || { printf 'GOOD_FELLOW_MAX_RUNTIME must be at least 181 seconds\n' >&2; exit 64; }
+if [ "$MAX_RUNTIME" -ge 1800 ]; then
+  printf 'GOOD_FELLOW_MAX_RUNTIME=%s reaches/exceeds the 30-minute cadence; clamping to 1799\n' "$MAX_RUNTIME" >&2
+  MAX_RUNTIME=1799
+fi
+[ "$GOOD_FELLOW_MIN_REVIEW_SECONDS" -ge 60 ] || { printf 'GOOD_FELLOW_MIN_REVIEW_SECONDS must be at least 60 seconds\n' >&2; exit 64; }
+MAX_REVIEW_FLOOR=$((MAX_RUNTIME - 120))
+if [ "$GOOD_FELLOW_MIN_REVIEW_SECONDS" -gt "$MAX_REVIEW_FLOOR" ]; then
+  printf 'GOOD_FELLOW_MIN_REVIEW_SECONDS=%s exceeds the cleanup-safe maximum; clamping to %s\n' \
+    "$GOOD_FELLOW_MIN_REVIEW_SECONDS" "$MAX_REVIEW_FLOOR" >&2
+  GOOD_FELLOW_MIN_REVIEW_SECONDS=$MAX_REVIEW_FLOOR
+fi
 GOOD_FELLOW_RUN_STARTED_AT_EPOCH=$(date +%s)
 GOOD_FELLOW_RUN_DEADLINE_EPOCH=$((GOOD_FELLOW_RUN_STARTED_AT_EPOCH + MAX_RUNTIME))
 GOOD_FELLOW_RUN_STOP_AT_EPOCH=$((GOOD_FELLOW_RUN_DEADLINE_EPOCH - 120))
@@ -425,6 +442,20 @@ printf '%s\n' "$DEPLOY_DIR" > "$POINTER_TMP"
 chmod 600 "$POINTER_TMP"
 mv -f "$POINTER_TMP" "$HOME/.good-fellow/deployment-current"
 mv -f "$LAUNCHER_TMP" "$HOME/.good-fellow/run-good-fellow.sh"
+
+KEEP_DEPLOYMENTS=3
+OLD_DEPLOYS=( "$HOME/.good-fellow"/deploy-* )
+remove_count=$((${#OLD_DEPLOYS[@]} - KEEP_DEPLOYMENTS))
+remove_index=0
+while [ "$remove_index" -lt "$remove_count" ]; do
+  OLD_DEPLOY=${OLD_DEPLOYS[$remove_index]}
+  if [ -d "$OLD_DEPLOY" ] && [ ! -L "$OLD_DEPLOY" ]; then
+    case "$OLD_DEPLOY" in
+      "$HOME/.good-fellow"/deploy-*) find "$OLD_DEPLOY" -depth -delete ;;
+    esac
+  fi
+  remove_index=$((remove_index + 1))
+done
 ```
 
 Verify the launcher, pointer, and selected version runner before relying on them:

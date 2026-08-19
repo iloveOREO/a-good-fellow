@@ -105,18 +105,29 @@ VERSION_RUNNER="$DEPLOY_DIR/run-good-fellow.sh"
   `pr-handoff.sh`, and `notification-receipts.sh`. The Claude command must include
   `--disable-slash-commands` and not allow the global `Skill` tool; the Codex command
   must use the deployment's paired `CODEX_HOME`;
-  otherwise a scheduled run can bypass the immutable runtime through interactive
-  skill symlinks. Any failure means scheduled code is stale or incomplete; suggest
-  re-running `/onboard`.
+  the PR guard must contain `snapshot_legacy_token`, the queue must contain
+  `ignoring malformed cursor`, and the handoff helper must contain
+  `ignoring invalid state file`. Missing agent-isolation flags can bypass the
+  immutable runtime through interactive skill symlinks; any other failure means the
+  scheduled code is stale or incomplete. Suggest re-running `/onboard`.
 - **Repeated timeouts.** Consistently hitting the limit means the workload no longer
   fits in one tick. Suggest raising `GOOD_FELLOW_MAX_RUNTIME` in `~/.good-fellow/env`
-  (keeping it under the 30-minute cadence) or narrowing scope in the instruction gist.
+  or narrowing scope in the instruction gist. Current runners clamp values at or above
+  the 30-minute cadence to 1799 seconds with a warning so an older `1800` setting does
+  not brick the schedule.
 - **Credential expiry.** Claude OAuth refresh tokens expire roughly monthly; a run of
   `FATAL` lines starting on one date usually means a re-login is due
   (`claude setup-token`, then update `~/.good-fellow/env`).
 - **Stale worktrees.** `ls ~/.good-fellow/worktrees/` piling up means runs are dying
   before cleanup. Left in place deliberately after failures, but a large backlog is a
   signal — offer to prune with `git worktree prune` per repo.
+- **Malformed queue state.** `pr-queue: ignoring malformed cursor` or
+  `pr-handoff: ignoring invalid state file` is recoverable: healthy rows continue and
+  the next cursor advance replaces a bad cursor. Report the affected path; repeated
+  warnings for the same handoff mean the corrupt file should be inspected and removed.
+- **Deployment buildup.** Current onboarding retains the three newest real
+  `~/.good-fellow/deploy-*` directories. More than three after a successful onboarding
+  indicates an older publisher or a cleanup failure.
 
 ## 5. Is work moving fairly?
 

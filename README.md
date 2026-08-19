@@ -56,13 +56,19 @@ Reviews fail closed: each PR gets a fresh complete conversation snapshot, clean
 verdicts require explicit diff/call-path/test evidence, and a bundled guard rechecks
 HEAD, comments, reviews, threads, draft/open state, and CI immediately before posting.
 New feedback invalidates an older clean marker even when no new commit was pushed.
+CI/mergeability and GitHub's synthetic merge commit remain live gates but are excluded
+from durable review identity, so their background recomputation cannot trigger a
+duplicate review. Repositories with no HEAD or test-merge checks are treated as having
+no CI gate rather than waiting forever.
 When a completed clean review is blocked only by CI or mergeability, the sweep leaves
 a visible HEAD-bound waiting review instead of hiding the result in local state; that
 marker prevents duplicate review while the same gate remains.
 The full PR inventory uses a persistent fair queue and processes PRs one at a time.
 After each item, the next deep item starts only when the review-time floor still fits;
 otherwise the untouched tail stays queued rather than being bulk-skipped. Interrupted
-work is handed off only with matching HEAD and guarded state. Owner sweeps emit
+work is handed off only with matching HEAD and guarded state. A malformed cursor is
+ignored and replaced on the next advance; malformed handoff entries are reported and
+skipped without disabling healthy queue rows. Owner sweeps emit
 short-lived coverage receipts; the final notification pass clears routed inbox entries
 only when that work was covered or fresh GitHub state proves it is no longer actionable.
 

@@ -146,12 +146,23 @@ commit it examined, so the next sweep can tell "already reviewed, unchanged" fro
 <!-- good-fellow:v1 reviewed=<sha> base=<base-sha> state=<conversation-state-token> action=<comment-or-approve> verdict=<clean-concern-or-waiting> -->
 ```
 
-`base=` binds incremental review reuse to the PR base, `state=` attests the external
-code/conversation state observed before posting, and `action=` distinguishes a
+`base=` binds incremental review reuse to the PR base, `state=` attests the stable
+external code/conversation state observed before posting, and `action=` distinguishes a
 commit-pinned comment from an approval. `verdict=` lets the mutation guard enforce
 clean-only predicates while still allowing a concrete concern. Older current-login
 markers without these attributes still identify our output, but a review skill must
 not treat them as proof that nothing changed.
+
+The durable `state=` token excludes CI, `mergeable`, `mergeStateStatus`, and GitHub's
+synthetic `potentialMergeCommit`. Those values can change without a commit or
+conversation update and therefore are live submission gates, not reasons to repeat a
+code review or comment. A marker is invalidated by HEAD/base or stable external
+conversation changes; live gates are re-read immediately before a clean outcome.
+During migration, the guard also exposes the previous token and handoffs accept either
+form. For an older current-HEAD marker that matches neither form, absence of any later
+title/body edit or external review/comment/thread event proves that only legacy live
+gate churn occurred; reuse the marker instead of repeating the review. Regardless of
+token changes, an existing concern suppresses another comment for the same root cause.
 
 A completed review must leave a visible marked outcome even when approval is blocked
 solely by pending/unknown CI or unresolved/conflicting mergeability. In that case post
@@ -217,7 +228,8 @@ Before acting on any PR, issue, thread, or discussion:
   no-longer-owned work may be reconciled read from fresh state.
   Both owner and cleaner must use `notification-receipts.sh subject-proof`; its shared
   double capture, fixed schema, stable sorting, and SHA-256 implementation are the
-  single source of truth for Issue/Discussion proofs.
+  single source of truth for Issue/Discussion proofs. Receipt files are recovery aids
+  for the same or immediately following sweeps and are pruned once older than 24 hours.
 
 ## 6. Unattended discipline
 

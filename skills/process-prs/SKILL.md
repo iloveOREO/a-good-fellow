@@ -79,7 +79,15 @@ For a covered result, capture `COVERAGE_STATE` after its last mutation. For ever
 verify PR state after that observation, record it, then advance once. Missing/failed
 receipts leave inbox work unread but do not block queue progress:
 
+Derive `OWNER`/`REPO` from the already validated inventory `REPO_URL`; obtain `HEAD`
+from `COVERAGE_STATE`; set `OUTCOME` to the exact finalized table result; and take
+`THREAD_ID` only from the matching row in `NOTIFICATIONS_FILE`.
+
 ```bash
+REPO_PATH=${REPO_URL#https://api.github.com/repos/}
+OWNER=${REPO_PATH%%/*}
+REPO=${REPO_PATH#*/}
+HEAD=$("$GUARD" head "$COVERAGE_STATE")
 OBSERVATION=$("$RECEIPTS_TOOL" observe pr "$REPO_URL" "$NUMBER" "$THREAD_ID")
 IFS=$'\t' read -r OBSERVED LAST_READ <<< "$OBSERVATION"
 "$GUARD" verify "$OWNER" "$REPO" "$NUMBER" "$COVERAGE_STATE"
@@ -123,9 +131,14 @@ to a verdict or start another operation.
 A user-authored PR is ready only when effective CI is green, every thread is resolved,
 and no comment awaits a reply. Capture the same complete guard snapshot as §2B; never
 substitute a capped query. `CI_CLEAN=true` means either an exact-parent merge rollup
-`SUCCESS`, or a successful `pull_request` HEAD workflow whose run API association
-matches this PR/base/head when the merge rollup is null. Everything unknown fails
-closed; failing checks retain their run/job ids.
+`SUCCESS`, no check/status rollup on either the exact HEAD or exact-parent test merge,
+or a successful `pull_request` HEAD workflow whose run API association matches this
+PR/base/head when the merge rollup is null. A null/null pair means the repository has
+no checks; it is clean rather than a fictional pending gate. Everything else unknown
+fails closed; failing checks retain their run/job ids. When GitHub omits the workflow
+run's PR association (seen on some fork PRs), the HEAD fallback deliberately remains
+unknown; report that live gate and rely on an exact-parent merge rollup rather than
+guessing an association.
 
 ```bash
 CI_CLEAN=$("$GUARD" ci-clean "$PR_STATE")
@@ -168,27 +181,43 @@ this PR; never reuse notification or earlier-sweep metadata:
 umask 077
 PR_STATE=$(mktemp "${TMPDIR:-/tmp}/good-fellow-pr-state.XXXXXX")
 "$GUARD" snapshot "$OWNER" "$REPO" "$NUMBER" > "$PR_STATE"
+STATE_TOKEN=$("$GUARD" token "$PR_STATE")
+LEGACY_STATE_TOKEN=$("$GUARD" legacy-token "$PR_STATE")
 ```
 
 The snapshot must prove open/non-draft state and complete bounded connections; never
-fall back to a smaller query. Read its full ledger before any decision.
+fall back to a smaller query. Read its full ledger before any decision. The durable
+external token binds HEAD/base and review-relevant PR/conversation state, but excludes
+CI, `mergeable`, `mergeStateStatus`, and the synthetic `potentialMergeCommit`; those
+are re-read as live submission gates and never trigger a code rereview by themselves.
 
 ### Step 1 — Prefer current GitHub state over handoff
 
 Before loading a handoff, inspect every authenticated-user current-HEAD review/comment;
 foreign, edited, or minimized markers never count. A clean marker wins only when its
-reviewed SHA/base/token match, CI and threads are clean, no direct request remains, and
-an `action=approve` review still is approved and undismissed. A concern marker wins
-only while its current-head token and unresolved concern still match.
+reviewed SHA/base and either stable or migration-only legacy token match, CI and
+threads are clean, no direct request remains, and an `action=approve` review still is
+approved and undismissed. A current-HEAD concern marker always suppresses the same
+root cause: while the concern remains unresolved, do not repost it merely because
+other state changed. Inspect only the post-marker delta for genuinely new work.
+
+Markers written before stable-token rollout may match `LEGACY_STATE_TOKEN`. If a
+current-HEAD/base marker matches neither token, do not immediately rereview: first
+compare title/body edit times and the complete external review/comment/thread ledger
+after that marker. With no later stable external event, treat the mismatch as legacy
+CI/mergeability churn and reuse the marker. With a real later event, review only that
+delta and continue suppressing already-recorded concerns. New writes always use
+`STATE_TOKEN`; `pr-handoff.sh match` performs the same stable-or-legacy migration check.
 
 A **gate-waiting marker** is an authenticated current-HEAD `verdict=waiting` comment
 whose body explicitly says the code review is complete, reports no blocking code
 finding, and names only a live CI or mergeability gate. It wins while its reviewed
-SHA/base/token match and that gate remains, so clear any duplicate handoff, finalize
-`ci-waiting`, and advance without another comment or code review. If the gate becomes
-clean while HEAD/base/token still match, treat the marker as exact-HEAD code coverage
-and route only the live approval/comment predicates; do not reread the diff. New
-external feedback or a marker state mismatch invalidates that reuse.
+SHA/base and stable-or-legacy token match and that gate remains, so clear any
+duplicate handoff, finalize `ci-waiting`, and advance without another comment or code
+review. If the gate becomes clean while HEAD/base/token still match, treat the marker
+as exact-HEAD code coverage and route only the live approval/comment predicates; do
+not reread the diff. New external feedback or a marker state mismatch invalidates
+that reuse.
 
 Treat an authenticated-user current-HEAD `APPROVED` review with **no marker** as
 legacy code coverage when the ledger proves it remains approved/undismissed, is
@@ -203,9 +232,11 @@ do not use this shortcut.
 ### Step 2 — Match or discard saved work
 
 Only after those current-state gates, match the saved snapshot's head/base/external
-token. `match` prints `reviewing` or `reviewed`; exit 1 means none and exit 3 means
-stale. A stale, malformed, or semantically incomplete handoff is cleared and the PR is
-reviewed fresh—never advance it merely because saved state became stale.
+token. `match` prints `reviewing` or `reviewed` for a stable-or-legacy token match,
+and `reviewing-migrate` or `reviewed-migrate` when HEAD/base match but the token needs
+ledger reconciliation. Exit 1 means none and exit 3 means HEAD/base stale. A stale,
+malformed, or semantically incomplete handoff is cleared and the PR is reviewed
+fresh—never advance it merely because saved state became stale.
 
 ```bash
 if PHASE=$("$HANDOFF_TOOL" match "$OWNER" "$REPO" "$NUMBER" "$PR_STATE"); then
@@ -220,6 +251,13 @@ else
   esac
 fi
 ```
+
+For a `*-migrate` phase, load the payload before clearing anything and compare its
+saved complete ledger, title/body evidence, range, and handled comment/thread IDs with
+the fresh snapshot. If there is no later stable external event, re-save the unchanged
+payload and original phase against `PR_STATE`, then continue normally without rereading
+code. If any stable event is new or the payload cannot prove completeness, clear and
+restart fresh. Never treat CI or mergeability-only drift as a new event.
 
 - `reviewing`: apply §1's time floor, recreate an exact detached worktree, validate the
   payload, and continue its pending files/paths/tests. Do not reread content already
@@ -266,7 +304,7 @@ root cause in the current ledger/payload, mark that exact comment seen when its
 snapshot field `seen=false`:
 
 ```bash
-"$GUARD" verify "$OWNER" "$REPO" "$NUMBER" "$PR_STATE"
+"$GUARD" verify-external "$OWNER" "$REPO" "$NUMBER" "$PR_STATE"
 gh api graphql -f query='mutation($id:ID!){
   addReaction(input:{subjectId:$id,content:EYES}){reaction{content}}
 }' -f id="$COMMENT_NODE_ID"

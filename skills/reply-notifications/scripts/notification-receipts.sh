@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Cross-skill receipts bind owner coverage to an exact GitHub notification thread
-# version. Receipts remain briefly so a later tick can finish cleanup after a crash.
+# version. Receipts remain for at most about one day so a later tick can finish
+# cleanup after a crash without creating a multi-day stale-coverage window.
 set -Eeuo pipefail
 
 export GH_PROMPT_DISABLED=1
@@ -164,7 +165,7 @@ case "$mode" in
     validate_updated_at "$6"
     if [ "$7" != - ]; then validate_updated_at "$7"; fi
     case "$2:$8" in
-      pr:draft|pr:ready|pr:waiting-author|pr:ci-waiting|pr:commented|pr:approved|pr:fixed) ;;
+      pr:ready|pr:waiting-author|pr:ci-waiting|pr:commented|pr:approved|pr:fixed) ;;
       issue:fixed|issue:answered|issue:clarified) ;;
       discussion:answered|discussion:no-response-needed) ;;
       *) printf 'notification-receipts: invalid covered outcome\n' >&2; exit 64 ;;
@@ -238,7 +239,7 @@ case "$mode" in
     [ "$#" -eq 1 ] || usage
     for file in "$STATE_DIR"/notification-receipts-*.tsv; do
       [ -f "$file" ] && [ ! -L "$file" ] || continue
-      find "$file" -type f -mtime +2 -delete 2>/dev/null || true
+      find "$file" -type f -mtime +0 -delete 2>/dev/null || true
     done
     ;;
   *) usage ;;

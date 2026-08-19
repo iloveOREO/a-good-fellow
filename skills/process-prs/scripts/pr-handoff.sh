@@ -90,17 +90,22 @@ snapshot_values() {
   SNAPSHOT_BASE=$first
   first=$("$GUARD" token "$snapshot")
   SNAPSHOT_TOKEN=$first
+  first=$("$GUARD" legacy-token "$snapshot")
+  SNAPSHOT_LEGACY_TOKEN=$first
   validate_oid "$SNAPSHOT_HEAD" 'snapshot head'
   validate_oid "$SNAPSHOT_BASE" 'snapshot base'
   validate_token "$SNAPSHOT_TOKEN"
+  validate_token "$SNAPSHOT_LEGACY_TOKEN"
 
-  # Refuse a snapshot that is being rewritten while its three fields are read.
+  # Refuse a snapshot that is being rewritten while its four fields are read.
   second=$("$GUARD" head "$snapshot")
   [ "$second" = "$SNAPSHOT_HEAD" ] || { printf 'pr-handoff: snapshot changed while reading\n' >&2; exit 3; }
   second=$("$GUARD" base "$snapshot")
   [ "$second" = "$SNAPSHOT_BASE" ] || { printf 'pr-handoff: snapshot changed while reading\n' >&2; exit 3; }
   second=$("$GUARD" token "$snapshot")
   [ "$second" = "$SNAPSHOT_TOKEN" ] || { printf 'pr-handoff: snapshot changed while reading\n' >&2; exit 3; }
+  second=$("$GUARD" legacy-token "$snapshot")
+  [ "$second" = "$SNAPSHOT_LEGACY_TOKEN" ] || { printf 'pr-handoff: snapshot changed while reading\n' >&2; exit 3; }
 }
 
 verify_snapshot_target() {
@@ -144,6 +149,18 @@ load_handoff() {
   [ "$actual_size" = "$STORED_SIZE" ] || die 'stored payload size mismatch'
 }
 
+# Collection modes must remain usable when one state file is truncated or corrupt.
+# Validate in a subshell first because load_handoff's targeted modes intentionally
+# fail hard; a single bad collection entry is instead ignored with a visible warning.
+load_handoff_for_scan() {
+  local file=$1
+  if ! (load_handoff "$file") >/dev/null 2>&1; then
+    printf 'pr-handoff: ignoring invalid state file %s\n' "$file" >&2
+    return 1
+  fi
+  load_handoff "$file"
+}
+
 require_key_match() {
   [ "$STORED_OWNER" = "$1" ] && [ "$STORED_REPO" = "$2" ] && [ "$STORED_NUMBER" = "$3" ] ||
     die 'handoff key does not match file contents'
@@ -154,7 +171,7 @@ capture_queue_rows() {
   : > "$output"
   for file in "$STATE_DIR"/process-prs-handoff-*.state; do
     [ -e "$file" ] || [ -L "$file" ] || continue
-    load_handoff "$file"
+    load_handoff_for_scan "$file" || continue
     repo_url="https://api.github.com/repos/$STORED_OWNER/$STORED_REPO"
     if record=$(gh api "repos/$STORED_OWNER/$STORED_REPO/pulls/$STORED_NUMBER" --jq '
       [(.number|tostring),.state,(.base.repo.full_name // ""),.url,
@@ -207,7 +224,7 @@ normalize_queue_rows() {
   '
 }
 
-SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
+SCRIPT_DIR=$(CDPATH='' cd "$(dirname "$0")" && pwd -P)
 GUARD="$SCRIPT_DIR/pr-review-guard.sh"
 [ -f "$GUARD" ] && [ ! -L "$GUARD" ] && [ -x "$GUARD" ] || die 'pr-review-guard.sh is missing or unsafe'
 
@@ -257,11 +274,18 @@ case "$mode" in
     snapshot_values "$5"
     verify_snapshot_target "$2" "$3" "$4" "$5"
     if [ "$STORED_HEAD" != "$SNAPSHOT_HEAD" ] ||
-       [ "$STORED_BASE" != "$SNAPSHOT_BASE" ] ||
-       [ "$STORED_TOKEN" != "$SNAPSHOT_TOKEN" ]; then
+       [ "$STORED_BASE" != "$SNAPSHOT_BASE" ]; then
       exit 3
     fi
-    printf '%s\n' "$STORED_PHASE"
+    if [ "$STORED_TOKEN" = "$SNAPSHOT_TOKEN" ] ||
+       [ "$STORED_TOKEN" = "$SNAPSHOT_LEGACY_TOKEN" ]; then
+      printf '%s\n' "$STORED_PHASE"
+    else
+      # A token-schema migration and a real external-state delta are intentionally
+      # indistinguishable here. The skill must compare the saved complete ledger
+      # with the fresh snapshot before rebinding or discarding this handoff.
+      printf '%s-migrate\n' "$STORED_PHASE"
+    fi
     ;;
   payload)
     [ "$#" -eq 4 ] || usage
@@ -284,7 +308,7 @@ case "$mode" in
     [ "$#" -eq 1 ] || usage
     for file in "$STATE_DIR"/process-prs-handoff-*.state; do
       [ -e "$file" ] || [ -L "$file" ] || continue
-      load_handoff "$file"
+      load_handoff_for_scan "$file" || continue
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$STORED_OWNER" "$STORED_REPO" "$STORED_NUMBER" "$STORED_HEAD" \
         "$STORED_BASE" "$STORED_TOKEN" "$STORED_PHASE" "$STORED_SIZE"
@@ -295,7 +319,7 @@ case "$mode" in
     reviewing_count=0
     for file in "$STATE_DIR"/process-prs-handoff-*.state; do
       [ -e "$file" ] || [ -L "$file" ] || continue
-      load_handoff "$file"
+      load_handoff_for_scan "$file" || continue
       [ "$STORED_PHASE" = reviewing ] || continue
       reviewing_count=$((reviewing_count + 1))
       [ "$reviewing_count" -le 1 ] || die 'multiple reviewing handoffs violate serial ownership'
@@ -324,7 +348,7 @@ case "$mode" in
     [ "$#" -eq 1 ] || usage
     for file in "$STATE_DIR"/process-prs-handoff-*.state; do
       [ -f "$file" ] && [ ! -L "$file" ] || continue
-      load_handoff "$file"
+      load_handoff_for_scan "$file" || continue
       if pr_state=$(gh api "repos/$STORED_OWNER/$STORED_REPO/pulls/$STORED_NUMBER" --jq .state 2>/dev/null); then
         case "$pr_state" in
           open) ;;
