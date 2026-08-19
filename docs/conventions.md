@@ -138,13 +138,28 @@ This is how later sweeps recognize work that is already done. Do not omit it, an
 not add visible boilerplate ("as an AI...", "automated review") unless the gist asks
 for it.
 
+The marker may carry optional attributes after the version. A PR review records the
+commit it examined, so the next sweep can tell "already reviewed, unchanged" from
+"reviewed, but new commits have landed":
+
+```
+<!-- good-fellow:v1 reviewed=<sha> -->
+```
+
+Detect the marker by matching `good-fellow:v1` alone — attributes are optional, and
+markers written before this existed must keep counting as ours. When `reviewed=` is
+absent, fall back to comparing the comment's timestamp against the head commit's.
+
 ## 5. Idempotence
 
 Before acting on any PR, issue, thread, or discussion:
 
 - Check for the marker, or for any existing comment/reply from the user's own login
   (`gh api user --jq .login`), covering the same concern.
-- If present, skip — never post duplicate replies or re-review a handled PR.
+- If present **and nothing has changed since**, skip — never post duplicate replies or
+  re-review a PR that has not moved. "Handled" is relative to a state, not permanent:
+  a PR we reviewed which has since received new commits is unhandled for that new work,
+  and a thread we replied to which has since been answered may need us again.
 - One run failing halfway must be safe to re-run: post the marker comment only **after**
   the action it records (push, fix, review) has succeeded.
 
