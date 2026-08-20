@@ -327,7 +327,12 @@ else
       $pr.mergeable == "MERGEABLE" and
       $pr.potentialMergeCommit != null and
       $pr.potentialMergeCommit.parents.totalCount == 2 and
-      (([ $pr.potentialMergeCommit.parents.nodes[].oid ] | sort) == ([ $pr.baseRefOid, $pr.headRefOid ] | sort)) and
+      # baseRefOid lags the live base ref between PR syncs, while GitHub builds
+      # the test merge against the current base tip — requiring the exact pair
+      # {baseRefOid, headRefOid} fails closed forever on any PR whose base
+      # advanced. The merge commit comes from this PR object, so requiring the
+      # PR head as one of its two parents is the binding that matters.
+      (([ $pr.potentialMergeCommit.parents.nodes[].oid ] | map(select(. == $pr.headRefOid)) | length) == 1) and
       (
         (
           $pr.commits.nodes[0].commit.statusCheckRollup == null and
@@ -359,7 +364,12 @@ else
       $pr.mergeable == "MERGEABLE" and
       $pr.potentialMergeCommit != null and
       $pr.potentialMergeCommit.parents.totalCount == 2 and
-      (([ $pr.potentialMergeCommit.parents.nodes[].oid ] | sort) == ([ $pr.baseRefOid, $pr.headRefOid ] | sort)) and
+      # baseRefOid lags the live base ref between PR syncs, while GitHub builds
+      # the test merge against the current base tip — requiring the exact pair
+      # {baseRefOid, headRefOid} fails closed forever on any PR whose base
+      # advanced. The merge commit comes from this PR object, so requiring the
+      # PR head as one of its two parents is the binding that matters.
+      (([ $pr.potentialMergeCommit.parents.nodes[].oid ] | map(select(. == $pr.headRefOid)) | length) == 1) and
       $pr.potentialMergeCommit.statusCheckRollup == null and
       $pr.commits.nodes[0].commit.statusCheckRollup != null and
       $pr.commits.nodes[0].commit.statusCheckRollup.state == "SUCCESS"

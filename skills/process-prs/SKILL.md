@@ -385,7 +385,12 @@ changes; otherwise name the checked risk areas in 1–3 concrete sentences.
   conflicting mergeability: a concise `verdict=waiting action=comment` review stating
   that the current HEAD was reviewed, naming the concrete risk areas checked, and
   naming the live gate. It must not begin with `LGTM` or imply approval. This visible
-  marker is required even when no direct review request exists.
+  marker is required even when no direct review request exists. A branch-protection
+  required approval (`reviewDecision=REVIEW_REQUIRED`, or `mergeStateStatus=BLOCKED`
+  from that alone) is NEVER a valid gate to wait on — that approval is this skill's
+  own output, so waiting on it deadlocks. When it is the only blocker, the gates are
+  clean: use `verdict=clean`. An existing waiting marker naming only that pseudo-gate
+  suppresses nothing; route the clean predicates immediately.
 - No concern and effective CI/threads clean: `verdict=clean`; only here does a direct
   request use `submit-approve`, otherwise use `submit-comment`.
 
