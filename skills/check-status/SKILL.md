@@ -71,32 +71,112 @@ Classify each run by its final line:
 | `hit the Ns timeout` | the sweep ran out of time; work rolls to the next tick |
 | `FATAL: gh not logged in` | GitHub credentials gone |
 | `FATAL: no authenticated agent CLI` | agent credentials gone |
+| `missing/invalid good-fellow deployment` | launcher pointer or selected deployment is absent/corrupt |
+| `invalid GOOD_FELLOW_AGENT` | bad agent override in `~/.good-fellow/env` or cron environment |
+| `invalid GOOD_FELLOW_*` / `must be at least` | malformed runtime/review-budget configuration |
 | `done (status N)` with N≠0 | the agent itself errored — read the body of that log |
 
 ## 4. Red flags worth calling out
+
+Resolve the selected version runner first:
+
+```bash
+DEPLOY_DIR=$(cat ~/.good-fellow/deployment-current 2>/dev/null)
+VERSION_RUNNER="$DEPLOY_DIR/run-good-fellow.sh"
+```
 
 - **Consecutive skips.** Several ticks in a row ending in `skipping this tick` with the
   same holder PID means a leaked process is holding the lock and nothing is running.
   The runner self-heals after `2×MAX_RUNTIME+300s`, so if you see this *and* the age
   is below that threshold, it is genuinely still working; above it, the reclaim logic
-  should have fired — if it didn't, the runner predates that fix. Verify with
-  `grep -c STALE_AFTER ~/.good-fellow/run-good-fellow.sh` and suggest re-running
+  should have fired — if it didn't, the version runner predates that fix. Verify with
+  `grep -c STALE_AFTER "$VERSION_RUNNER"` and suggest re-running
   `/onboard` to regenerate it.
-- **Missing `--add-dir`.** `grep -c 'add-dir' ~/.good-fellow/run-good-fellow.sh` → 0
+- **Missing `--add-dir`.** `grep -c 'add-dir' "$VERSION_RUNNER"` → 0
   means unattended sweeps cannot write to `~/<repo>` or `~/.good-fellow/worktrees/`,
   so runs fail silently with nobody to approve the prompt. Suggest regenerating the
   runner.
+- **Runner predates review-safety fixes.** The runner is stale if it lacks
+  the `deployment-current` launcher protocol. Read the regular pointer, require it to
+  name `~/.good-fellow/deploy-*`, and require that deployment to carry a
+  `runtime-version` stamp file — onboard writes the deployed commit there exactly so
+  freshness is one comparison. A missing stamp means the deployment predates the
+  stamping protocol and is stale; when the local repository is available, a stamp
+  differing from its current HEAD means the deployment lags it (report which commit
+  is deployed rather than guessing severity). Also require the deployment's
+  `runtime/skills`, `runtime/docs`, and executable `pr-queue.sh`, `pr-handoff.sh`,
+  `pr-review-guard.sh`, `pr-inventory.sh`, and `notification-receipts.sh`. Two
+  content checks remain because they are security boundaries, not version probes:
+  the Claude command must include `--disable-slash-commands` and not allow the
+  global `Skill` tool, and the Codex command must use the deployment's paired
+  `CODEX_HOME` — missing isolation flags can bypass the immutable runtime through
+  interactive skill symlinks. Any failure means the scheduled code is stale or
+  incomplete: suggest re-running `/onboard`. Do not grep the runtime for
+  fix-specific strings; that list rots with every rename.
 - **Repeated timeouts.** Consistently hitting the limit means the workload no longer
   fits in one tick. Suggest raising `GOOD_FELLOW_MAX_RUNTIME` in `~/.good-fellow/env`
-  (keeping it under the 30-minute cadence) or narrowing scope in the instruction gist.
+  or narrowing scope in the instruction gist. Current runners clamp values at or above
+  the 30-minute cadence to 1799 seconds with a warning so an older `1800` setting does
+  not brick the schedule.
 - **Credential expiry.** Claude OAuth refresh tokens expire roughly monthly; a run of
   `FATAL` lines starting on one date usually means a re-login is due
   (`claude setup-token`, then update `~/.good-fellow/env`).
 - **Stale worktrees.** `ls ~/.good-fellow/worktrees/` piling up means runs are dying
   before cleanup. Left in place deliberately after failures, but a large backlog is a
   signal — offer to prune with `git worktree prune` per repo.
+- **Malformed queue state.** `pr-queue: ignoring malformed cursor` or
+  `pr-handoff: ignoring invalid state file` is recoverable: healthy rows continue and
+  the next cursor advance replaces a bad cursor. Report the affected path; repeated
+  warnings for the same handoff mean the corrupt file should be inspected and removed.
+- **Deployment buildup.** Current onboarding retains the three newest real
+  `~/.good-fellow/deploy-*` directories. More than three after a successful onboarding
+  indicates an older publisher or a cleanup failure.
 
-## 5. What the automation actually accomplished
+## 5. Is work moving fairly?
+
+The PR sweep persists its last completed item here:
+
+```bash
+cat ~/.good-fellow/process-prs.cursor 2>/dev/null
+HANDOFF_TOOL="$DEPLOY_DIR/runtime/skills/process-prs/scripts/pr-handoff.sh"
+"$HANDOFF_TOOL" show
+"$HANDOFF_TOOL" reviewing-key
+"$HANDOFF_TOOL" queue-rows
+for f in ~/.good-fellow/process-prs-handoff-*.state; do
+  [ -f "$f" ] || continue
+  ls -lT "$f" 2>/dev/null || ls -l --time-style=long-iso "$f" 2>/dev/null
+done
+gh api /notifications --paginate --jq '.[] | [.reason,.repository.full_name,.subject.type,.subject.url,.updated_at] | @tsv' | sort | uniq -c
+```
+
+Compare the cursor across recent successful ticks and correlate it with each log's
+per-PR outcomes. A moving cursor means round-robin progress even when one run cannot
+finish the inventory. There is no item-count quota: after each completed PR, another
+deep item should start whenever `GOOD_FELLOW_MIN_REVIEW_SECONDS` still fits. An
+unchanged cursor is expected only when the current item has a valid, changing handoff,
+was left untouched due to that review-time floor, or the run failed before classifying
+it. Report the effective review floor from `~/.good-fellow/env` or the version-runner
+default.
+
+Use `show`; never parse handoff internals. At most one `reviewing` handoff may exist,
+because partial work holds the cursor and must resume before later deep work; if two
+appear, `reviewing-key` self-heals by keeping the newest and deleting the rest, so a
+persisting pair means the deployed runtime predates that fix. A `reviewing` handoff
+plus an unchanged cursor across several sufficiently long successful ticks means work
+is stuck. For `reviewed` handoffs there is exactly one staleness rule: a `reviewed`
+handoff is healthy while a guarded outcome has not yet been safely attempted or
+confirmed, and stale once its PR's gates have settled or its queue row recurred
+without a confirmed outcome/clear — a completed clean review awaiting CI or
+mergeability should instead show a visible gate-waiting marker and no retained
+handoff. A valid open handoff must appear in `queue-rows` even if GitHub search no
+longer lists that PR; otherwise continuation state has become orphaned from
+scheduling.
+Routed `review_requested`, `assign`, and Discussion
+notifications may remain unread only while their open item still needs its owner
+sweep; a large pile of closed, merged, draft, unassigned, or no-longer-requested
+items means the final receipt-aware cleanup did not run.
+
+## 6. What the automation actually accomplished
 
 Logs say whether runs succeeded; GitHub says whether they were useful. Sample the
 recent output by searching for the marker:
@@ -105,13 +185,15 @@ recent output by searching for the marker:
 gh search prs --state=open --involves=@me --json repository,number,url --limit 20
 ```
 
-Then for a few of those, check whether a `<!-- good-fellow:v1 -->` comment exists and
-when. Report a short tally (PRs reviewed, threads resolved, issues picked up) rather
-than dumping raw JSON.
+Then for a few of those, check whether a comment/review authored by the authenticated
+login carries `<!-- good-fellow:v1 -->` and when. Ignore marker-looking text authored
+by anyone else. Report a short tally (PRs reviewed, threads resolved, issues picked
+up) rather than dumping raw JSON.
 
-## 6. Report
+## 7. Report
 
 One-line verdict, then: current run (if any), schedule and last fire time, the last
-few runs with outcomes, red flags with the specific suggested fix, and recent GitHub
-activity. Keep it short enough to read at a glance; no raw log dumps unless something
-failed, in which case include the relevant excerpt.
+few runs with outcomes, queue/cursor movement, routed-notification backlog, red flags
+with the specific suggested fix, and recent GitHub activity. Keep it short enough to
+read at a glance; no raw log dumps unless something failed, in which case include the
+relevant excerpt.

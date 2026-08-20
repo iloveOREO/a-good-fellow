@@ -11,20 +11,22 @@ as well as GNU/Linux.
 
 ## What it does, every 30 minutes
 
-1. **reply-notifications** — triages unread GitHub notifications, replies where a
-   response from you is actually warranted, marks threads read.
-2. **join-discussions** — finds Discussions that @mention you and posts a substantive
-   reply.
-3. **fix-assigned-issues** — takes open issues assigned to you, fixes them on a
-   `good-fellow/issue-N` branch in an isolated clone/worktree, and opens a PR
-   (via **create-pr**).
-4. **process-prs** — walks every open PR involving you:
+1. **process-prs** — walks every open PR involving you before notification backlog can
+   consume the run's time or context:
    - *Your PRs*: judges unresolved comments from Copilot/reviewers; real issues get
      fixed and pushed, then the thread gets a reply and is resolved.
    - *Others' PRs*: pulls the code locally and reviews for **critical issues only** —
-     no summaries, no nits. Clean PR → a single `LGTM` comment (or an approval, when
-     you're a requested reviewer). Already-reviewed PRs are skipped via a hidden
-     `<!-- good-fellow:v1 -->` marker.
+     no generic summaries, no nits. A clean PR gets a short, concrete review rationale
+     (or an approval when you're a requested reviewer); a bare `LGTM` is reserved for
+     extremely simple, unambiguous changes. Current markers and your legacy approvals
+     pinned to the current HEAD prevent needless re-review.
+2. **fix-assigned-issues** — takes open issues assigned to you, fixes them on a
+   `good-fellow/issue-N` branch in an isolated clone/worktree, and opens a PR
+   (via **create-pr**).
+3. **join-discussions** — finds Discussions that @mention you and posts a substantive
+   reply.
+4. **reply-notifications** — runs last, triages ordinary unread notifications, and
+   uses owner-sweep receipts to mark only work actually covered as read.
 
 Your standing preferences (language, tone, review taste, repo scope) live in a
 personal gist file `good-fellow-instruction.md`, cached at
@@ -35,10 +37,10 @@ personal gist file `good-fellow-instruction.md`, cached at
 | Skill | Runs | Purpose |
 |---|---|---|
 | [`onboard`](skills/onboard/SKILL.md) | manual, once per machine | install, authenticate, schedule |
-| [`reply-notifications`](skills/reply-notifications/SKILL.md) | every sweep | triage unread notifications |
-| [`join-discussions`](skills/join-discussions/SKILL.md) | every sweep | answer Discussions that @mention you |
-| [`fix-assigned-issues`](skills/fix-assigned-issues/SKILL.md) | every sweep | fix issues assigned to you, open PRs |
 | [`process-prs`](skills/process-prs/SKILL.md) | every sweep | fix feedback on your PRs, review others' |
+| [`fix-assigned-issues`](skills/fix-assigned-issues/SKILL.md) | every sweep | fix issues assigned to you, open PRs |
+| [`join-discussions`](skills/join-discussions/SKILL.md) | every sweep | answer Discussions that @mention you |
+| [`reply-notifications`](skills/reply-notifications/SKILL.md) | every sweep | final triage and receipt-aware cleanup |
 | [`create-pr`](skills/create-pr/SKILL.md) | helper + manual | commit, push, open a PR |
 | [`check-status`](skills/check-status/SKILL.md) | manual | health of the automation |
 | [`sync-instructions`](skills/sync-instructions/SKILL.md) | manual | pull/edit/push your instruction gist |
@@ -49,6 +51,26 @@ yourself". Obstacles are resolved by rules the agent can apply alone — recover
 state, retry once, or skip and let the next tick try again — and safety comes from
 operations that fail safely rather than from asking first. `create-pr` is called by
 `fix-assigned-issues` to ship a fix, and is equally usable on its own.
+
+Reviews fail closed: each PR gets a fresh complete conversation snapshot, clean
+verdicts require explicit diff/call-path/test evidence, and a bundled guard rechecks
+HEAD, comments, reviews, threads, draft/open state, and CI immediately before posting.
+New feedback invalidates an older clean marker even when no new commit was pushed.
+CI/mergeability and GitHub's synthetic merge commit remain live gates but are excluded
+from durable review identity, so their background recomputation cannot trigger a
+duplicate review. Repositories with no HEAD or test-merge checks are treated as having
+no CI gate rather than waiting forever.
+When a completed clean review is blocked only by CI or mergeability, the sweep leaves
+a visible HEAD-bound waiting review instead of hiding the result in local state; that
+marker prevents duplicate review while the same gate remains.
+The full PR inventory uses a persistent fair queue and processes PRs one at a time.
+After each item, the next deep item starts only when the review-time floor still fits;
+otherwise the untouched tail stays queued rather than being bulk-skipped. Interrupted
+work is handed off only with matching HEAD and guarded state. A malformed cursor is
+ignored and replaced on the next advance; malformed handoff entries are reported and
+skipped without disabling healthy queue rows. Owner sweeps emit
+short-lived coverage receipts; the final notification pass clears routed inbox entries
+only when that work was covered or fresh GitHub state proves it is no longer actionable.
 
 The three **manual** skills are for you, and none of them belongs in the cron job.
 `onboard` is the only one that changes machine setup. `/check-status` reads the lock,
@@ -134,9 +156,11 @@ about any other agent you use and it will install there too.
   `~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` in `~/.good-fellow/env`
   (from `claude setup-token`); codex via `~/.codex/auth.json` (from `codex login`);
   or cursor-agent;
-- generates the cron runner at `~/.good-fellow/run-good-fellow.sh` from the reference
-  implementation embedded in the skill, and installs the 30-minute cron job (on
-  macOS, cron may need Full Disk Access for scheduled runs).
+- materializes a versioned deployment (runtime + matching version runner) under
+  `~/.good-fellow/` so a sweep cannot observe a source checkout while it is edited;
+- atomically updates `deployment-current` and the stable launcher at
+  `~/.good-fellow/run-good-fellow.sh`, then installs the 30-minute cron job (on macOS,
+  cron may need Full Disk Access for scheduled runs).
 
 The agent that onboards you and the agent that runs the sweeps need not be the same:
 the runner auto-detects claude → codex → cursor-agent at each tick, and
@@ -154,13 +178,13 @@ below — a `git pull` alone is not enough.
 cd ~/a-good-fellow && git pull
 ```
 
-- **Covered by the pull**: every already-installed skill, plus `docs/conventions.md`
-  and `AGENTS.md`. The installed skills are symlinks *into* this repo, not copies, so
-  updated instructions take effect immediately.
+- **Covered by the pull**: every interactively installed skill, plus
+  `docs/conventions.md` and `AGENTS.md`. Agent skill directories are symlinks *into*
+  this repo, so interactive sessions see the update after restart.
 - **Not covered**: a **newly added skill** has no symlink on that machine yet, so the
-  agent cannot see it; and `~/.good-fellow/run-good-fellow.sh` is a **generated copy**,
-  so fixes to the reference implementation in `skills/onboard/SKILL.md` never reach it
-  on their own.
+  agent cannot see it; `~/.good-fellow/run-good-fellow.sh` is a **generated copy**;
+  and scheduled sweeps deliberately use an **immutable versioned deployment** rather
+  than the mutable checkout. None of those refresh from `git pull` alone.
 
 So after pulling, re-run the onboard skill — it is idempotent and doubles as the
 upgrade path. On a machine that is already onboarded the slash command works:
@@ -171,8 +195,9 @@ upgrade path. On a machine that is already onboarded the slash command works:
 
 (If the session predates the install and does not recognize it, restart the agent, or
 ask it to "run the onboard skill in skills/onboard/SKILL.md".) It refreshes the
-symlinks (adding any new skills), regenerates the runner from the
-current reference, leaves an existing crontab entry alone, and re-runs the smoke test.
+symlinks (adding any new skills), materializes a fresh deployment, atomically updates
+the pointer/launcher, leaves an existing crontab entry alone, and re-runs the smoke
+test.
 Then **restart the agent session** so newly added skills appear as slash commands.
 
 Two notes: re-onboarding overwrites `~/.good-fellow/instruction.md` from the gist, so
@@ -188,10 +213,11 @@ docs/conventions.md  shared rules: gist instructions, untrusted-input boundary,
                      worktree isolation, bot marker, idempotence
 ```
 
-Anything that must exist as a file on a machine (the cron runner) is generated
-per-machine by the onboard skill, not versioned here. Runtime state (instruction
-cache, worktrees, logs, lock, generated runner, optional env file) lives in
-`~/.good-fellow/`, outside this repo.
+Anything that must exist as a file on a machine (launcher, deployment pointer, and
+versioned runtime/runner pairs) is generated per-machine by the onboard skill, not
+versioned here. Runtime state (instruction cache, deployments, PR cursor/handoff,
+worktrees, logs, lock, launcher, optional env file) lives in `~/.good-fellow/`, outside
+this repo.
 
 ## Safety properties
 
@@ -201,7 +227,8 @@ cache, worktrees, logs, lock, generated runner, optional env file) lives in
 - **PR/issue content is treated as data, not instructions** — imperatives inside
   untrusted content are never executed, and untrusted strings are never interpolated
   into shell commands (PRs are addressed by number).
-- **Idempotent**: the marker comment prevents duplicate replies and re-reviews.
+- **Idempotent**: a marker authored by the authenticated user prevents duplicate
+  replies and re-reviews; copied marker text from other participants is never trusted.
 - **Bounded**: single-instance lock plus a 25-minute timeout per run; never
   force-pushes, closes, or merges anything; the only PR-state mutation is approving a
   clean PR you were asked to review.
