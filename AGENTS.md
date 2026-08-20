@@ -34,5 +34,8 @@ setup; `check-status` never changes anything without asking.
 
 The scheduled entry point is `~/.good-fellow/run-good-fellow.sh` (cron, every 30
 minutes) — a stable launcher that atomically selects a versioned runtime/runner pair
-via `~/.good-fellow/deployment-current`. Onboard generates these machine-local files
-from `skills/onboard/SKILL.md`; they are not versioned here.
+via `~/.good-fellow/deployment-current`. Before invoking a model, its deterministic
+maintenance gate stays offline until the configured interval (48 hours by default),
+then conflict-safely refreshes the instruction cache and cleanly fast-forwards a
+private managed source without touching the user's checkout. Onboard generates these
+machine-local files from `skills/onboard/SKILL.md`; they are not versioned here.

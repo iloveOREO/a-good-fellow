@@ -318,4 +318,98 @@ assert_eq "$deploy_count" 3
 [ -d "$runner_home/.good-fellow/deploy-4" ] || fail 'retention removed a newest deployment'
 [ -d "$runner_home/.good-fellow/deploy-5" ] || fail 'retention removed a newest deployment'
 
+# Periodic maintenance runs outside model context, updates a remote-only gist change,
+# preserves a true two-sided conflict, stays offline before its deadline, and
+# fast-forwards a clean source checkout.
+MAINTENANCE="$ROOT/skills/onboard/scripts/maintenance-check.sh"
+maintenance_state="$TEMP_ROOT/maintenance-state"
+maintenance_bin="$TEMP_ROOT/maintenance-bin"
+maintenance_gist="$TEMP_ROOT/maintenance-gist.md"
+maintenance_calls="$TEMP_ROOT/maintenance-gh-calls"
+mkdir -p "$maintenance_state" "$maintenance_bin"
+printf 'old preference\n' > "$maintenance_state/instruction.md"
+printf 'old preference\n' > "$maintenance_state/instruction.remote"
+printf 'remote preference\n' > "$maintenance_gist"
+: > "$maintenance_calls"
+cat > "$maintenance_bin/gh" <<'GH_MAINTENANCE_STUB'
+#!/usr/bin/env bash
+set -Eu
+printf '%s\n' "$*" >> "$STUB_MAINTENANCE_CALLS"
+if [ "${1:-}" = api ]; then
+  printf 'gist-id\n'
+elif [ "${1:-}" = gist ] && [ "${2:-}" = view ]; then
+  cp "$STUB_MAINTENANCE_GIST" /dev/stdout
+else
+  exit 64
+fi
+GH_MAINTENANCE_STUB
+chmod +x "$maintenance_bin/gh"
+
+maintenance_output=$(PATH="$maintenance_bin:$PATH" \
+  STUB_MAINTENANCE_CALLS="$maintenance_calls" \
+  STUB_MAINTENANCE_GIST="$maintenance_gist" \
+  GOOD_FELLOW_STATE_DIR="$maintenance_state" \
+  GOOD_FELLOW_SYNC_INTERVAL_SECONDS=1 "$MAINTENANCE" "$TEMP_ROOT/no-source")
+printf '%s\n' "$maintenance_output" | grep -F 'instruction cache updated from gist' >/dev/null ||
+  fail 'maintenance did not update a remote-only gist change'
+assert_eq "$(cat "$maintenance_state/instruction.md")" 'remote preference'
+assert_eq "$(cat "$maintenance_state/instruction.remote")" 'remote preference'
+
+printf 'local preference\n' > "$maintenance_state/instruction.md"
+printf 'new remote preference\n' > "$maintenance_gist"
+printf '0\n' > "$maintenance_state/maintenance-last-check"
+maintenance_output=$(PATH="$maintenance_bin:$PATH" \
+  STUB_MAINTENANCE_CALLS="$maintenance_calls" \
+  STUB_MAINTENANCE_GIST="$maintenance_gist" \
+  GOOD_FELLOW_STATE_DIR="$maintenance_state" \
+  GOOD_FELLOW_SYNC_INTERVAL_SECONDS=1 "$MAINTENANCE" "$TEMP_ROOT/no-source")
+printf '%s\n' "$maintenance_output" | grep -F 'both changed; preserving local copy' >/dev/null ||
+  fail 'maintenance overwrote or missed a two-sided instruction conflict'
+assert_eq "$(cat "$maintenance_state/instruction.md")" 'local preference'
+
+calls_before=$(wc -l < "$maintenance_calls" | tr -d ' ')
+PATH="$maintenance_bin:$PATH" \
+  STUB_MAINTENANCE_CALLS="$maintenance_calls" \
+  STUB_MAINTENANCE_GIST="$maintenance_gist" \
+  GOOD_FELLOW_STATE_DIR="$maintenance_state" \
+  GOOD_FELLOW_SYNC_INTERVAL_SECONDS=999999 "$MAINTENANCE" "$TEMP_ROOT/no-source" \
+  > "$TEMP_ROOT/maintenance-not-due.out"
+grep -F 'not due' "$TEMP_ROOT/maintenance-not-due.out" >/dev/null ||
+  fail 'maintenance did not honor its offline interval'
+assert_eq "$(wc -l < "$maintenance_calls" | tr -d ' ')" "$calls_before"
+
+source_remote="$TEMP_ROOT/source-remote.git"
+source_seed="$TEMP_ROOT/source-seed"
+source_checkout="$TEMP_ROOT/source-checkout"
+git init --bare -q "$source_remote"
+git clone -q "$source_remote" "$source_seed"
+git -C "$source_seed" -c user.name=test -c user.email=test@example.com \
+  commit --allow-empty -m first >/dev/null
+git -C "$source_seed" push -q -u origin HEAD:main
+git -C "$source_remote" symbolic-ref HEAD refs/heads/main
+git clone -q "$source_remote" "$source_checkout"
+original_source_head=$(git -C "$source_checkout" rev-parse HEAD)
+git -C "$source_seed" -c user.name=test -c user.email=test@example.com \
+  commit --allow-empty -m second >/dev/null
+git -C "$source_seed" push -q
+expected_source_head=$(git -C "$source_seed" rev-parse HEAD)
+printf '0\n' > "$maintenance_state/maintenance-last-check"
+printf 'new remote preference\n' > "$maintenance_state/instruction.md"
+printf 'new remote preference\n' > "$maintenance_state/instruction.remote"
+maintenance_deploy="$maintenance_state/deploy-test"
+mkdir -p "$maintenance_deploy"
+printf '%s\n' "$original_source_head" > "$maintenance_deploy/runtime-version"
+printf '%s\n' "$maintenance_deploy" > "$maintenance_state/deployment-current"
+PATH="$maintenance_bin:$PATH" \
+  STUB_MAINTENANCE_CALLS="$maintenance_calls" \
+  STUB_MAINTENANCE_GIST="$maintenance_gist" \
+  GOOD_FELLOW_STATE_DIR="$maintenance_state" \
+  GOOD_FELLOW_SYNC_INTERVAL_SECONDS=1 "$MAINTENANCE" "$source_checkout" \
+  > "$TEMP_ROOT/maintenance-source.out"
+assert_eq "$(git -C "$source_checkout" rev-parse HEAD)" "$original_source_head"
+assert_eq "$(git -C "$maintenance_state/source" rev-parse HEAD)" "$expected_source_head"
+assert_eq "$(cat "$maintenance_state/maintenance-source-updated")" "$expected_source_head"
+grep -F "source_updated=$expected_source_head" "$TEMP_ROOT/maintenance-source.out" >/dev/null ||
+  fail 'maintenance did not report the source fast-forward'
+
 printf 'runtime state tests passed\n'

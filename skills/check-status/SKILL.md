@@ -74,6 +74,8 @@ Classify each run by its final line:
 | `missing/invalid good-fellow deployment` | launcher pointer or selected deployment is absent/corrupt |
 | `invalid GOOD_FELLOW_AGENT` | bad agent override in `~/.good-fellow/env` or cron environment |
 | `invalid GOOD_FELLOW_*` / `must be at least` | malformed runtime/review-budget configuration |
+| `maintenance: ... preserving ...` | a source or instruction conflict was detected and left untouched |
+| `maintenance: source_updated=<sha>` | source fast-forwarded; the same run should republish the deployment |
 | `done (status N)` with N≠0 | the agent itself errored — read the body of that log |
 
 ## 4. Red flags worth calling out
@@ -131,6 +133,14 @@ VERSION_RUNNER="$DEPLOY_DIR/run-good-fellow.sh"
 - **Deployment buildup.** Current onboarding retains the three newest real
   `~/.good-fellow/deploy-*` directories. More than three after a successful onboarding
   indicates an older publisher or a cleanup failure.
+- **Maintenance freshness.** Read `~/.good-fellow/maintenance-last-check` as an epoch
+  and compare it with the current time and `GOOD_FELLOW_SYNC_INTERVAL_SECONDS`
+  (172800 by default). A missing/overdue stamp means the deployed runner predates the
+  maintenance gate or GitHub checks keep failing. If
+  `~/.good-fellow/maintenance-source-updated` names a source commit different from
+  the selected deployment's `runtime-version`, the source fast-forward succeeded but
+  republishing did not; suggest `/onboard`. Report local/gist conflict messages from
+  recent logs and suggest `/sync-instructions` rather than overwriting either side.
 
 ## 5. Is work moving fairly?
 

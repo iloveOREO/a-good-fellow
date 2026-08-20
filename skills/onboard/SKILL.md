@@ -1,6 +1,6 @@
 ---
 name: onboard
-description: One-time interactive setup for the good-fellow GitHub automation. Installs the skills for every agent on the machine, checks gh login (guides device-code login on a remote machine), finds or creates the user's personal good-fellow-instruction.md gist, verifies headless agent auth (claude, codex, or cursor), generates the runner script, and installs a 30-minute cron job that runs the sweep skills. Use when the user says onboard, /onboard, set up good-fellow, or initialize the GitHub agent.
+description: Set up or upgrade the good-fellow GitHub automation. Installs the skills for every agent on the machine, checks gh login, derives and creates the user's personal instruction gist when missing, verifies headless agent auth, publishes the runner, and installs a 30-minute cron job with low-cost periodic source/gist synchronization. Use when the user says onboard, /onboard, set up good-fellow, initialize the GitHub agent, or upgrade an existing installation.
 ---
 
 # Onboard
@@ -117,19 +117,30 @@ gh api /gists --paginate --jq '.[] | select(.files["good-fellow-instruction.md"]
   gh gist view <GIST_ID> --filename good-fellow-instruction.md > ~/.good-fellow/instruction.md
   ```
 
-- **Not found**: explain that this file holds their standing instructions (reply
-  language, review taste, repos to prioritize/skip, tone) applied to every GitHub
-  task. Ask them to dictate the content now, then save it with a heredoc — **not the
-  `Write` tool**, which would be blocked outside the repo (Step 0):
+- **Not found**: create the first version automatically. Review only conversation
+  history and persistent preferences the current agent is actually allowed to see.
+  Summarize durable evidence about how the user prefers to collaborate and code,
+  what they care about most, their review taste, and their standard for good code.
+  Never invent preferences, infer sensitive traits, or mine unrelated GitHub content.
+  If history is sparse, use a short conservative baseline: preserve compatibility,
+  avoid unnecessary code/files, test behavior in proportion to risk, explain material
+  tradeoffs, and match the user's language. Do not interrupt onboarding to ask them to
+  dictate content.
+
+  Write a concise Markdown file with sections for collaboration, engineering
+  priorities, review standards, and repository-specific preferences when supported by
+  evidence. Save it with a heredoc — **not the `Write` tool**, which would be blocked
+  outside the repo (Step 0):
 
   ```bash
   cat > ~/.good-fellow/instruction.md <<'EOF'
-  <the user's instructions>
+  <evidence-backed summary, with conservative defaults where history is silent>
   EOF
   ```
 
-  Show it back for confirmation, then upload it as a secret gist so future machines
-  can reuse it. The filename inside the gist must be exactly
+  Upload it immediately as a secret gist so future machines can reuse it, then show
+  the user the created content and gist URL so they can refine it later with
+  `/sync-instructions`. The filename inside the gist must be exactly
   `good-fellow-instruction.md` (gist filenames come from the local file name, so
   create it from a copy with that name):
 
@@ -137,6 +148,24 @@ gh api /gists --paginate --jq '.[] | select(.files["good-fellow-instruction.md"]
   cp ~/.good-fellow/instruction.md /tmp/good-fellow-instruction.md
   gh gist create /tmp/good-fellow-instruction.md --desc "good-fellow personal instructions"
   ```
+
+After either path, record the exact last-synced content for conflict detection:
+
+```bash
+cp ~/.good-fellow/instruction.md ~/.good-fellow/instruction.remote
+chmod 600 ~/.good-fellow/instruction.md ~/.good-fellow/instruction.remote
+date +%s > ~/.good-fellow/maintenance-last-check
+chmod 600 ~/.good-fellow/maintenance-last-check
+```
+
+### Existing-install upgrade mode
+
+When the scheduled maintenance prompt says the source was fast-forwarded, run
+unattended upgrade mode: preserve `instruction.md` and `instruction.remote`, refresh
+the skill symlinks from Step 1, and publish/verify a new immutable deployment with
+Step 5. Do not repeat login, gist authoring, or cron installation. If the checkout is
+dirty/diverged or a prerequisite is unsafe, log the reason and leave the current
+deployment active; never ask a question from the scheduled run.
 
 ## Step 4 — Headless agent auth
 
@@ -219,6 +248,13 @@ Requirements the generated script must satisfy:
 - **Log rotation**: delete logs in `~/.good-fellow/logs` older than 14 days.
 - **Deployment retention**: after a new pointer is published and verified, retain the
   three newest real `deploy-*` directories and remove older immutable deployments.
+- **Token-free maintenance gate**: before invoking an agent, run the bundled
+  `maintenance-check.sh`. It stays offline between checks (48 hours by default),
+  compares gist content without model context, preserves local edits/conflicts, and
+  fast-forwards only its private managed source under `~/.good-fellow/source` (never
+  the user's checkout). Invoke upgrade mode in the already scheduled agent run only
+  when source code actually changed. Override the cadence
+  with `GOOD_FELLOW_SYNC_INTERVAL_SECONDS` (for example `4147200` for 48 days).
 
 Materialize the deployment before writing its runner. Execute this publication flow
 with `set -e`; any failed copy, comparison, executable check, syntax check, or rename
@@ -247,6 +283,7 @@ test -x "$RUNTIME_DIR/skills/process-prs/scripts/pr-inventory.sh"
 test -x "$RUNTIME_DIR/skills/process-prs/scripts/pr-queue.sh"
 test -x "$RUNTIME_DIR/skills/process-prs/scripts/pr-handoff.sh"
 test -x "$RUNTIME_DIR/skills/reply-notifications/scripts/notification-receipts.sh"
+test -x "$RUNTIME_DIR/skills/onboard/scripts/maintenance-check.sh"
 for script in "$RUNTIME_DIR"/skills/*/scripts/*.sh; do
   [ -f "$script" ] || continue
   bash -n "$script"
@@ -270,6 +307,7 @@ set -Eeuo pipefail
 STATE_DIR="$HOME/.good-fellow"
 DEPLOY_DIR=$(cd "$(dirname "$0")" && pwd -P)
 REPO_DIR="$DEPLOY_DIR/runtime"
+SOURCE_REPO="<REPO_ROOT>"
 [ -d "$REPO_DIR/skills" ] && [ -d "$REPO_DIR/docs" ] || { printf 'incomplete good-fellow deployment; run onboard\n' >&2; exit 66; }
 [ -f "$STATE_DIR/env" ] && { set -a; . "$STATE_DIR/env"; set +a; }
 MAX_RUNTIME="${GOOD_FELLOW_MAX_RUNTIME:-1500}"
@@ -334,6 +372,23 @@ fi
 
 gh auth status >/dev/null 2>&1 || { log "FATAL: gh not logged in; run onboard"; exit 78; }
 
+# Network/model economy: this deterministic gate is fully offline between due
+# checks and never places gist/repository metadata in the model context.
+MAINTENANCE_NOTE=""
+MAINTENANCE_TOOL="$REPO_DIR/skills/onboard/scripts/maintenance-check.sh"
+if [ -x "$MAINTENANCE_TOOL" ]; then
+  MAINTENANCE_OUTPUT=$("$MAINTENANCE_TOOL" "$SOURCE_REPO" 2>&1) || {
+    log "$MAINTENANCE_OUTPUT"
+    MAINTENANCE_OUTPUT=""
+  }
+  [ -z "$MAINTENANCE_OUTPUT" ] || log "$MAINTENANCE_OUTPUT"
+  case "$MAINTENANCE_OUTPUT" in
+    *'maintenance: source_updated='*)
+      MAINTENANCE_NOTE="Before the owner sweeps, perform onboard existing-install upgrade mode from $STATE_DIR/source. Preserve the instruction cache/baseline and existing auth/cron; refresh skill links and atomically publish the new immutable deployment. If verification fails, leave the current deployment active and continue this sweep."
+      ;;
+  esac
+fi
+
 AGENT="${GOOD_FELLOW_AGENT:-}"
 if [ -z "$AGENT" ]; then
   if command -v claude >/dev/null 2>&1 && { [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || [ -s "$HOME/.claude/.credentials.json" ]; }; then
@@ -350,6 +405,8 @@ case "$AGENT" in claude|codex|cursor) ;; *) log "FATAL: invalid GOOD_FELLOW_AGEN
 log "agent CLI: $AGENT"
 
 PROMPT="You are running an unattended good-fellow sweep on behalf of the user.
+
+$MAINTENANCE_NOTE
 
 First read $REPO_DIR/docs/conventions.md and ~/.good-fellow/instruction.md and obey
 both throughout. Then execute these four skills in order, each per its SKILL.md:

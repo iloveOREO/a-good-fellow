@@ -30,7 +30,9 @@ as well as GNU/Linux.
 
 Your standing preferences (language, tone, review taste, repo scope) live in a
 personal gist file `good-fellow-instruction.md`, cached at
-`~/.good-fellow/instruction.md` and applied to every task.
+`~/.good-fellow/instruction.md` and applied to every task. A shell preflight checks
+the gist and this repository every 48 hours by default, outside model context; the
+30-minute sweeps therefore spend no tokens polling for updates.
 
 ## The skills
 
@@ -80,7 +82,8 @@ hitting the time limit, cron not firing at all (on macOS, usually Full Disk Acce
 a runner generated before a fix landed — and it changes nothing without asking.
 `/sync-instructions` pulls your instruction gist into the local cache or pushes edits
 back, diffing before it overwrites either side so a local edit is never silently lost,
-and creates the gist if you don't have one yet.
+and creates the gist if you don't have one yet. Scheduled maintenance can safely pull
+remote-only changes, but leaves local-only or conflicting edits for this manual skill.
 
 Every skill obeys [`docs/conventions.md`](docs/conventions.md) — the shared rules on
 instruction handling, untrusted input, workspace isolation, the bot marker,
@@ -98,8 +101,10 @@ cd ~/a-good-fellow
 ```
 
 Onboarding is **interactive by design** — it may show you a GitHub device-login code
-to enter on your phone, and ask you to dictate your standing instructions — so run it
-in an interactive session, not a headless one. The agent will need to create symlinks,
+to enter on your phone. If no instruction gist exists, it automatically drafts one
+from durable preferences evidenced in available conversation history (falling back to
+conservative engineering defaults), creates the secret gist, and shows you the result
+for later refinement. The agent will need to create symlinks,
 write `~/.good-fellow/run-good-fellow.sh`, and edit your crontab; approve those when
 prompted.
 
@@ -151,7 +156,8 @@ about any other agent you use and it will install there too.
   machine (`~/.claude/skills/`, `~/.codex/skills/`, `~/.cursor/skills/`, ...);
 - checks `gh auth status`, and if needed walks you through the device-code login
   (built for remote machines: it shows you the URL + one-time code and waits);
-- finds your `good-fellow-instruction.md` gist, or helps you write and upload one;
+- finds your `good-fellow-instruction.md` gist, or drafts one from available history
+  and conservative defaults and uploads it automatically;
 - verifies a headless agent CLI is authenticated for the scheduled runs — claude via
   `~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` in `~/.good-fellow/env`
   (from `claude setup-token`); codex via `~/.codex/auth.json` (from `codex login`);
@@ -161,6 +167,13 @@ about any other agent you use and it will install there too.
 - atomically updates `deployment-current` and the stable launcher at
   `~/.good-fellow/run-good-fellow.sh`, then installs the 30-minute cron job (on macOS,
   cron may need Full Disk Access for scheduled runs).
+- installs a deterministic maintenance preflight that stays offline between checks,
+  then every 48 hours compares the instruction gist and source upstream without model
+  tokens. It conflict-safely refreshes the gist cache and fast-forwards a private
+  managed source under `~/.good-fellow/source` without touching your checkout, then
+  uses that same scheduled agent run to publish an updated immutable deployment. Set
+  `GOOD_FELLOW_SYNC_INTERVAL_SECONDS=4147200` in
+  `~/.good-fellow/env` if you prefer a 48-day interval.
 
 The agent that onboards you and the agent that runs the sweeps need not be the same:
 the runner auto-detects claude → codex → cursor-agent at each tick, and
@@ -200,10 +213,10 @@ the pointer/launcher, leaves an existing crontab entry alone, and re-runs the sm
 test.
 Then **restart the agent session** so newly added skills appear as slash commands.
 
-Two notes: re-onboarding overwrites `~/.good-fellow/instruction.md` from the gist, so
-if that cache has local edits, push them first with `/sync-instructions`. And
-`/check-status` flags a runner that predates recent fixes, which is a good way to tell
-whether a machine still needs this.
+Two notes: scheduled synchronization never changes your checkout and preserves a
+dirty/diverged managed source or instruction conflict instead of overwriting it; use
+`/sync-instructions` to merge the latter. `/check-status` flags a runner that predates
+recent fixes, which is a good way to tell whether a machine still needs this.
 
 ## Layout
 

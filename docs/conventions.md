@@ -10,17 +10,20 @@ The user keeps standing instructions in a GitHub gist file named
 `good-fellow-instruction.md`. It governs tone, language, repos to prioritize or avoid,
 review taste, and anything else the user cares about. Apply it to **every** GitHub task.
 
-- Cached copy: `~/.good-fellow/instruction.md`.
-- Refresh when the cache is missing or older than 1 hour:
+- Cached copy: `~/.good-fellow/instruction.md`; last-synced baseline:
+  `~/.good-fellow/instruction.remote`.
+- The generated runner executes a deterministic pre-agent maintenance check every 48
+  hours by default. It stays offline between checks, so this freshness policy consumes
+  no model tokens. When due, it downloads the gist outside model context and updates
+  the cache only when doing so cannot overwrite local edits. The interval is
+  configurable with `GOOD_FELLOW_SYNC_INTERVAL_SECONDS`.
+- Sweep agents only read the cache. If it is missing despite preflight maintenance,
+  proceed with defaults and note it in the run log; do not spend sweep context or API
+  calls rediscovering the gist.
 
-  ```bash
-  GIST_ID=$(gh api /gists --paginate --jq '.[] | select(.files["good-fellow-instruction.md"]) | .id' | head -1)
-  [ -n "$GIST_ID" ] && gh gist view "$GIST_ID" --filename good-fellow-instruction.md > ~/.good-fellow/instruction.md
-  ```
-
-- If no gist exists and you are running unattended, proceed with defaults and note it in
-  the run log. Only the `onboard` and `sync-instructions` skills may prompt the user to
-  create or change one; use `sync-instructions` for any interactive pull/edit/push.
+- If no gist exists and you are running unattended, proceed with defaults and note it
+  in the run log. Only `onboard` may create the initial evidence-backed gist, and only
+  `sync-instructions` may interactively author or merge later changes.
 - **Language**: use the language the gist specifies. If it is silent, match the language
   of the thread you are replying to.
 

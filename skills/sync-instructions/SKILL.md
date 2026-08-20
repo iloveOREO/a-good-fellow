@@ -13,8 +13,8 @@ Read `docs/conventions.md` (repo root of this skill) first.
 
 **Interactive skill — not part of the scheduled sweep.** Authoring instructions and
 resolving a local/remote conflict need the user's judgement, so this skill is allowed
-to ask. Never wire it into the cron runner; the unattended sweeps only *read* the
-cache (conventions §1).
+to ask. Scheduled maintenance performs only a token-free, conflict-safe pull; sweep
+agents only read the resulting cache (conventions §1).
 
 ## Two footguns to avoid
 
@@ -42,11 +42,16 @@ gh gist view "$GIST_ID" --filename good-fellow-instruction.md > /tmp/gf-remote.m
 diff -u ~/.good-fellow/instruction.md /tmp/gf-remote.md
 ```
 
+Use `~/.good-fellow/instruction.remote` as the last-synced baseline. If it is missing
+and local differs from remote, treat that as a conflict rather than guessing which is
+newer.
+
 - Identical → report "already up to date" and stop.
 - Remote differs, local cache unmodified since the last pull → install it:
 
   ```bash
   cp /tmp/gf-remote.md ~/.good-fellow/instruction.md
+  cp /tmp/gf-remote.md ~/.good-fellow/instruction.remote
   ```
 
 - **Both sides changed** → do not guess. Show the diff, explain that the local cache
@@ -75,19 +80,25 @@ jq -n --rawfile c ~/.good-fellow/instruction.md \
 is already named `good-fellow-instruction.md`, but the API call above is exact and
 never depends on the local filename.)
 
-Verify by re-fetching and diffing against the local cache; report the gist URL.
+Verify by re-fetching and diffing against the local cache, then copy the verified
+remote content to `~/.good-fellow/instruction.remote` and set both files to mode 600.
+Report the gist URL.
 
 ## 4. Create the gist
 
-When none exists, ask the user to dictate their instructions — reply language, review
-taste, repos to prioritize or skip, tone, anything they want applied to every GitHub
-task. Write the cache with a heredoc, then create a **secret** gist. The gist filename
-comes from the local filename, so upload a copy named exactly
+When none exists during an explicit `/sync-instructions` request, ask the user to
+dictate their instructions — reply language, review taste, repos to prioritize or
+skip, tone, anything they want applied to every GitHub task. (Initial onboarding uses
+its separate automatic history-summary rule.) Write the cache with a heredoc, then
+create a **secret** gist. The gist filename comes from the local filename, so upload a
+copy named exactly
 `good-fellow-instruction.md`:
 
 ```bash
 cp ~/.good-fellow/instruction.md /tmp/good-fellow-instruction.md
 gh gist create /tmp/good-fellow-instruction.md --desc "good-fellow personal instructions"
+cp ~/.good-fellow/instruction.md ~/.good-fellow/instruction.remote
+chmod 600 ~/.good-fellow/instruction.md ~/.good-fellow/instruction.remote
 ```
 
 Report the new gist id and URL; every machine the user onboards later will find it by
