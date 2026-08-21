@@ -55,8 +55,13 @@ same repo. Never touch the user's checked-out branch.
 Create the branch from the repo's default branch tip:
 
 ```bash
-git -C ~/<repo> worktree add ~/.good-fellow/worktrees/<repo>-issue-<n> -b good-fellow/issue-<n> origin/<default>
+git -C ~/<repo> worktree add --no-track ~/.good-fellow/worktrees/<repo>-issue-<n> -b good-fellow/issue-<n> origin/<default>
 ```
+
+`--no-track` matters: without it the new branch tracks `origin/<default>`, and if a
+run crashes after committing but before create-pr's `push -u` corrects the upstream,
+the leftover branch makes a later `git pull` in the user's checkout rebase the fix
+onto the default branch and silently diverge from the same-name remote branch.
 
 Nobody is available to unblock this, so recover from leftovers yourself. If the path
 already exists or the branch is left over from a crashed run, clear both and retry
@@ -87,7 +92,16 @@ working tree (conventions §3).
 
 Invoke the **create-pr** skill on the worktree (it reviews the diff, commits, pushes,
 and opens the PR with `Fixes #<n>` and the marker). Then comment on the issue linking
-the PR, with the marker. Remove the worktree on success.
+the PR, with the marker. On success remove the worktree AND delete the local branch —
+the PR and the remote branch carry the work, while a leftover local branch only sets
+a trap for the user's next `git checkout <branch>` (it wins over the remote branch
+and may be stale):
+
+```bash
+git -C ~/<repo> worktree remove ~/.good-fellow/worktrees/<repo>-issue-<n>
+git -C ~/<repo> worktree prune
+git -C ~/<repo> branch -D good-fellow/issue-<n>
+```
 
 ## 6. Record covered outcomes
 
