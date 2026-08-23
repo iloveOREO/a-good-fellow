@@ -87,6 +87,15 @@ cat > "$stub_bin/gh" <<'GH_STUB'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if [ "${STUB_MODE:-waiting}" = receipt ]; then
+  if [ "${1:-}" = api ] && [ "${2:-}" = /notifications/threads/1 ]; then
+    printf '2026-08-19T00:00:00Z\t-\n'
+    exit 0
+  fi
+  printf 'unexpected receipt gh invocation\n' >&2
+  exit 64
+fi
+
 if [ "${1:-}" = api ] && [ "${2:-}" = graphql ]; then
   if [ "${STUB_MODE:-waiting}" = overflow ]; then
     printf 'gh: reviews exceed 100\n' >&2
@@ -131,6 +140,19 @@ chmod +x "$stub_bin/gh"
 export PATH="$stub_bin:$PATH"
 export STUB_COUNT_FILE="$TEMP_ROOT/gh-count"
 export STUB_POST_LOG="$TEMP_ROOT/gh-posts"
+
+# A declined Issue is covered only through the explicit owner-sweep outcome. The
+# receipt helper must accept and round-trip it so final notification cleanup can
+# consume the exact commented subject/version without causing duplicate comments.
+export STUB_MODE=receipt
+declined_receipt_state="$TEMP_ROOT/declined-receipt-state"
+GOOD_FELLOW_STATE_DIR="$declined_receipt_state" GOOD_FELLOW_RUN_STARTED_AT_EPOCH=test-declined \
+  "$RECEIPTS" record issue https://api.github.com/repos/acme/app 1 1 \
+  2026-08-19T00:00:00Z - declined - "$proof"
+declined_row=$(GOOD_FELLOW_STATE_DIR="$declined_receipt_state" \
+  "$RECEIPTS" lookup issue https://api.github.com/repos/acme/app 1 1 \
+  2026-08-19T00:00:00Z -)
+assert_eq "$(printf '%s\n' "$declined_row" | cut -f7)" declined
 
 make_marker_body() {
   local snapshot=$1 action=$2 verdict=$3 output=$4 first_line=$5

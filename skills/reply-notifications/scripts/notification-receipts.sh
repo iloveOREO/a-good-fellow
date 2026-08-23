@@ -181,7 +181,7 @@ case "$mode" in
     if [ "$7" != - ]; then validate_updated_at "$7"; fi
     case "$2:$8" in
       pr:ready|pr:waiting-author|pr:ci-waiting|pr:commented|pr:approved|pr:fixed) ;;
-      issue:fixed|issue:answered|issue:clarified) ;;
+      issue:fixed|issue:answered|issue:clarified|issue:declined) ;;
       discussion:answered|discussion:no-response-needed) ;;
       *) printf 'notification-receipts: invalid covered outcome\n' >&2; exit 64 ;;
     esac

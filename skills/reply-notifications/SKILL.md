@@ -107,6 +107,10 @@ For an open Issue receipt with outcome `fixed`, also re-prove that a currently o
 PR authored by the authenticated user still contains an exact `Fixes #N` or
 `Closes #N` reference for that repository. A closed PR or removed closing keyword
 invalidates the receipt even when the Issue digest itself is unchanged.
+An Issue receipt with outcome `declined` is valid only when the owner sweep already
+verified a current authenticated-user marked comment that states the concrete
+non-completion reason; its exact subject proof prevents cleanup from accepting it
+after the issue or conversation changes.
 
 Only then refresh the notification thread in the same compact shape and repeat exact
 lookup; changed `updated_at` also goes to Pass B. Thus a receipt covers both one
