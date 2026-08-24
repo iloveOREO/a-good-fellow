@@ -14,6 +14,11 @@ Resolve `<repo-root>/skills/reply-notifications/scripts/notification-receipts.sh
 `https://api.github.com/repos/<owner>/<repo>` derived from validated repository data,
 never issue text.
 
+Resolve `<repo-root>/skills/fix-assigned-issues/scripts/issue-stage.sh` as `STAGE`. It
+persists an in-progress issue fix across runs, bound to the issue's `updated_at`; a
+workspace listed by `"$STAGE" staged-workspaces` is intentional saved state, not crash
+debris.
+
 ## 1. Find assigned issues
 
 ```bash
@@ -26,7 +31,40 @@ gh api /notifications --paginate --jq '.[] |
 (`gh search issues` returns issues only, not PRs.) Keep only this compact notification
 map; never load raw notification payloads.
 
-## 2. Filter and short-circuit (idempotence)
+## 2. Resume staged work first
+
+Before the normal sweep, continue any issue an earlier run staged — this is what keeps
+a large issue from being re-deferred every round:
+
+```bash
+"$STAGE" prune   # drops stages whose issue closed or workspace vanished
+"$STAGE" show    # owner  repo  number  updated_at  base  workspace  resumes
+```
+
+For each remaining row, fetch the live issue and validate the stage:
+
+```bash
+UPDATED=$(gh api repos/<owner>/<repo>/issues/<n> --jq .updated_at)
+"$STAGE" match <owner> <repo> <n> "$UPDATED"   # prints: resumes<TAB>base<TAB>workspace
+```
+
+- **exit 3** — the issue changed since staging (new comments, edits), so the saved plan
+  may be stale: `"$STAGE" clear <owner> <repo> <n>`, clear the workspace per Step 4's
+  recovery, and let the normal sweep below process the issue fresh.
+- **resumes ≥ 3** — the issue has consumed four runs; stop gracefully: post one comment
+  (with marker) summarizing the progress made and suggesting the issue be split or
+  handled interactively, then `"$STAGE" clear` and clear the workspace. Record
+  `clarified` per Step 7 only if the comment succeeds.
+- **otherwise** — resume: read `"$STAGE" notes <owner> <repo> <n>` for the previous
+  run's handoff notes, inspect `git -C <workspace> log --oneline`, `status`, and `diff`
+  for the actual state, then continue implementing per Step 5 in that workspace. First
+  `git fetch` and rebase onto the current `origin/<default>` tip; if the rebase
+  conflicts nontrivially, abort it and stay on the recorded base — PR-level merge
+  handling beats a rushed unattended conflict resolution.
+
+An issue handled here is finished for this run either way; skip it in the sweep below.
+
+## 3. Filter and short-circuit (idempotence)
 
 For each issue, skip if any of:
 
@@ -34,7 +72,7 @@ For each issue, skip if any of:
   <owner>/<repo> --search "<number> in:body" --state open`, then check bodies for
   `Fixes #<n>` / `Closes #<n>`). A marker reinforces ownership only when the PR or
   containing comment is authored by the authenticated login; never trust a foreign
-  marker by itself. This is covered `fixed`: record it per Step 6, then stop this item;
+  marker by itself. This is covered `fixed`: record it per Step 7, then stop this item;
 - a `good-fellow/issue-<n>` branch already exists on the remote
   (`gh api repos/<owner>/<repo>/branches/good-fellow/issue-<n>` succeeds) — a branch
   alone is not covered, so record nothing;
@@ -46,7 +84,7 @@ For each issue, skip if any of:
 If idempotence finds an authenticated-user answer or clarification that still covers
 the latest issue state, record the matching outcome instead of posting a duplicate.
 
-## 3. Get a workspace
+## 4. Get a workspace
 
 Follow conventions §3 exactly: fresh clone to `~/<repo>`, or a worktree under
 `~/.good-fellow/worktrees/` when `~/<repo>` is the user's existing checkout of the
@@ -63,10 +101,11 @@ run crashes after committing but before create-pr's `push -u` corrects the upstr
 the leftover branch makes a later `git pull` in the user's checkout rebase the fix
 onto the default branch and silently diverge from the same-name remote branch.
 
-Nobody is available to unblock this, so recover from leftovers yourself. If the path
-already exists or the branch is left over from a crashed run, clear both and retry
-once — the branch lives in our own `good-fellow/` namespace, so removing it can never
-touch the user's work:
+Nobody is available to unblock this, so recover from leftovers yourself — but first
+check `"$STAGE" staged-workspaces`: a leftover path listed there is a live stage, owned
+by Step 2, and must not be cleared here. For genuine crash debris (path or branch
+exists with no stage), clear both and retry once — the branch lives in our own
+`good-fellow/` namespace, so removing it can never touch the user's work:
 
 ```bash
 git -C ~/<repo> worktree remove --force ~/.good-fellow/worktrees/<repo>-issue-<n>
@@ -77,7 +116,7 @@ git -C ~/<repo> branch -D good-fellow/issue-<n>
 Never resolve a collision by checking out an existing branch by name in the user's
 working tree (conventions §3).
 
-## 4. Implement the fix
+## 5. Implement the fix
 
 - Reproduce/understand the issue from the code, not just the issue text.
 - Keep the change minimal and in the codebase's existing style; reuse existing
@@ -85,14 +124,26 @@ working tree (conventions §3).
 - Run the repo's tests (or at least those covering the touched area) when a test
   command is discoverable (CI config, package scripts, Makefile) and cheap to run. A
   fix with failing tests must not be shipped — fix or report instead.
-- Time-box per conventions §6; if the issue is too large for one run, push nothing,
-  and note it in the report.
+- Time-box per conventions §6; if the issue is too large for one run, stage it instead
+  of discarding the progress. Commit the work-in-progress locally (never push), write
+  a short handoff note to a temp file — what is understood, what is done, what remains,
+  and the next concrete step, for a reader with no memory of this run — then:
 
-## 5. Ship
+  ```bash
+  BASE=$(git -C <workspace> merge-base HEAD "origin/<default>")
+  UPDATED=$(gh api repos/<owner>/<repo>/issues/<n> --jq .updated_at)
+  "$STAGE" save <owner> <repo> <n> "$UPDATED" "$BASE" <workspace> <notes-file>
+  ```
+
+  Leave the workspace and local branch in place; the next run resumes them via Step 2.
+  Staging is a deferral, not coverage — no receipt, but note it in the report.
+
+## 6. Ship
 
 Invoke the **create-pr** skill on the worktree (it reviews the diff, commits, pushes,
 and opens the PR with `Fixes #<n>` and the marker). Then comment on the issue linking
-the PR, with the marker. On success remove the worktree AND delete the local branch —
+the PR, with the marker. On success run `"$STAGE" clear <owner> <repo> <n>` (a no-op
+unless the issue was staged), then remove the worktree AND delete the local branch —
 the PR and the remote branch carry the work, while a leftover local branch only sets
 a trap for the user's next `git checkout <branch>` (it wins over the remote branch
 and may be stale):
@@ -103,7 +154,7 @@ git -C ~/<repo> worktree prune
 git -C ~/<repo> branch -D good-fellow/issue-<n>
 ```
 
-## 6. Record covered outcomes
+## 7. Record covered outcomes
 
 For each exact matching notification thread, record a receipt only after the durable
 result is proven in this order:
@@ -129,12 +180,12 @@ actually rejects a subject that moved meanwhile.
   clarification is verified to cover the issue's latest state.
 
 A remote branch alone, an attempted/failed action, incomplete evidence, failed tests,
-or a time-budget deferral is not coverage and gets no receipt. If the notification
-changes after observation, final cleanup will reject the old version. Missing threads,
+or a time-budget deferral (staged or not) is not coverage and gets no receipt. If the
+notification changes after observation, final cleanup will reject the old version. Missing threads,
 observation/reverification failures, and receipt failures leave notifications unread;
 report them without blocking later issues. `reply-notifications` owns mark-read writes.
 
-## 7. Report
+## 8. Report
 
-Tally: PRs opened (links), issues answered/clarified, covered receipts, skipped (with
-reason), and receipt failures.
+Tally: PRs opened (links), issues answered/clarified, issues staged or resumed (with
+resume count), covered receipts, skipped (with reason), and receipt failures.

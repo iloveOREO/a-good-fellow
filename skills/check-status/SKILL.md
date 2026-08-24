@@ -124,8 +124,11 @@ VERSION_RUNNER="$DEPLOY_DIR/run-good-fellow.sh"
   `FATAL` lines starting on one date usually means a re-login is due
   (`claude setup-token`, then update `~/.good-fellow/env`).
 - **Stale worktrees.** `ls ~/.good-fellow/worktrees/` piling up means runs are dying
-  before cleanup. Left in place deliberately after failures, but a large backlog is a
-  signal — offer to prune with `git worktree prune` per repo.
+  before cleanup. First exclude intentional ones: paths printed by
+  `<repo-root>/skills/fix-assigned-issues/scripts/issue-stage.sh staged-workspaces`
+  hold staged in-progress issue work and must not be pruned. Beyond those, leftovers
+  stay in place deliberately after failures, but a large backlog is a signal — offer
+  to prune with `git worktree prune` per repo.
 - **Malformed queue state.** `pr-queue: ignoring malformed cursor` or
   `pr-handoff: ignoring invalid state file` is recoverable: healthy rows continue and
   the next cursor advance replaces a bad cursor. Report the affected path; repeated
