@@ -59,8 +59,10 @@ Take the base from validated repository data, never from issue or PR text (conve
 checked out (conventions §3):
 
 ```bash
-# the base the PR will target: the repo default unless the invoker passed one
-BASE=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+# the base the PR will target: the repo default, resolved from the worktree's
+# own remote so this never depends on the runner's unrelated current directory
+BASE=$(gh repo view "$(git -C <worktree> remote get-url origin)" \
+  --json defaultBranchRef --jq .defaultBranchRef.name)
 git -C <worktree> fetch origin "$BASE:refs/good-fellow/base/$BASE" --force
 ```
 

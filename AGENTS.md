@@ -17,7 +17,8 @@ Skills (each in `skills/<name>/SKILL.md`):
   notifications against owner-sweep receipts/current state.
 - `join-discussions` — reply to Discussions that @mention the user.
 - `fix-assigned-issues` — fix assigned issues and open PRs.
-- `create-pr` — commit + push + open a PR from a working tree with changes.
+- `create-pr` — commit, sync onto the current base, push, and open a PR from a
+  working tree with changes.
 - `process-prs` — fix feedback on the user's PRs; review others' PRs (critical
   issues when found; otherwise a concise, concrete rationale, with bare `LGTM` only
   for extremely simple changes; fail closed on incomplete evidence or stale state,
