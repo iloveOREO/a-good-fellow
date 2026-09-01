@@ -179,6 +179,15 @@ edit/test; on mismatch clear any handoff, clean up, recapture, and restart this 
 without advancing. Handle all CI and feedback together, test, commit, and plain-push
 once—never force, rebase, or retry a stale decision.
 
+**create-pr's base-sync step does not apply here.** That step exists because a branch
+about to become a *new* PR must not open behind its base. This branch is already the
+head of an open PR: rebasing it onto a newer base would rewrite published history and
+need a force-push (conventions §3 and §6), and merging the base in would add a merge
+commit to the user's PR that nobody asked for. A branch that actually conflicts with its
+base is a live mergeability gate, so it routes to the `ci-waiting` / gate-waiting
+outcome above—never to a base-sync push. Push only what the fix itself changed, from the
+exact snapshot HEAD.
+
 Push before claiming a fix. Before every comment/reply/thread resolution, verify the
 current snapshot. After a push or any conversation mutation, capture a new complete
 snapshot, require the expected HEAD, and rebuild the ledger before the next mutation.
