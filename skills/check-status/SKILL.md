@@ -69,6 +69,8 @@ Classify each run by its final line:
 | `previous run still going (holder N, Ns); skipping this tick` | normal only if a real run was in flight |
 | `ERROR: lock stuck for Ns ... reclaiming` | a leaked holder was cleaned up; the run then proceeded |
 | `hit the Ns timeout` | the sweep ran out of time; work rolls to the next tick |
+| `<agent> hit a usage quota; falling back to <other>` | the preferred CLI was out of quota; this tick continued on the next authenticated agent |
+| `<agent> hit a usage quota; Ns left is too little to restart` | the quota hit too late in the tick to rerun; work rolls to the next tick |
 | `FATAL: gh not logged in` | GitHub credentials gone |
 | `FATAL: no authenticated agent CLI` | agent credentials gone |
 | `missing/invalid good-fellow deployment` | launcher pointer or selected deployment is absent/corrupt |
@@ -123,6 +125,15 @@ VERSION_RUNNER="$DEPLOY_DIR/run-good-fellow.sh"
 - **Credential expiry.** Claude OAuth refresh tokens expire roughly monthly; a run of
   `FATAL` lines starting on one date usually means a re-login is due
   (`claude setup-token`, then update `~/.good-fellow/env`).
+- **Model quota.** Repeated `done (status 1)` a couple of seconds into each tick, with
+  a `reached your ... limit` line in the body, is a usage quota rather than an auth
+  failure — `gh auth status` and the agent credentials will both look fine. Current
+  runners rotate to the next authenticated CLI when this happens, so a quota that
+  still stalls every tick means one of: no second agent is authenticated, the run
+  pinned `GOOD_FELLOW_AGENT` (an explicit pin deliberately outranks the fallback), or
+  the deployed runner predates the fallback. Suggest pinning a model that still has
+  budget (`ANTHROPIC_MODEL=claude-opus-5` in `~/.good-fellow/env`, which the runner
+  exports) and re-running `/onboard` if the runner is the stale part.
 - **Stale worktrees.** `ls ~/.good-fellow/worktrees/` piling up means runs are dying
   before cleanup. Left in place deliberately after failures, but a large backlog is a
   signal — offer to prune with `git worktree prune` per repo.
