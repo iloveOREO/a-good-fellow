@@ -299,6 +299,68 @@ printf '%s\n' "$runner_output" | grep -Fx 'good-fellow dry run ok.' >/dev/null |
 printf '%s\n' "$runner_output" | grep -F 'done (status 0)' >/dev/null ||
   fail 'clamped runner did not finish cleanly'
 
+# A usage quota on the preferred CLI must rotate to the next authenticated agent
+# within the same tick, because the sweep is re-entrant and the quota rejection cost
+# almost none of the budget. Reuse the runner home, swapping in stubs per case.
+mkdir -p "$runner_home/.codex"
+printf '{"stub":true}\n' > "$runner_home/.codex/auth.json"
+cat > "$runner_home/.local/bin/codex" <<'CODEX_STUB'
+#!/usr/bin/env bash
+printf 'good-fellow dry run ok.\n'
+CODEX_STUB
+cat > "$runner_home/.local/bin/claude" <<'CLAUDE_QUOTA_STUB'
+#!/usr/bin/env bash
+printf "You've reached your Fable limit. Switch to another model, or manage usage credits.\n"
+exit 1
+CLAUDE_QUOTA_STUB
+chmod +x "$runner_home/.local/bin/codex" "$runner_home/.local/bin/claude"
+
+quota_output=$(HOME="$runner_home" CLAUDE_CODE_OAUTH_TOKEN=test \
+  GOOD_FELLOW_DRY_RUN=1 "$runner" 2>&1)
+printf '%s\n' "$quota_output" | grep -F 'falling back to codex' >/dev/null ||
+  fail 'quota on the preferred CLI did not fall back'
+printf '%s\n' "$quota_output" | grep -Fx 'good-fellow dry run ok.' >/dev/null ||
+  fail 'fallback agent did not reach the dry-run sentinel'
+printf '%s\n' "$quota_output" | grep -F 'done (status 0)' >/dev/null ||
+  fail 'fallback run did not finish cleanly'
+[ ! -e "$runner_home/.good-fellow/.agent-output" ] ||
+  fail 'agent output capture leaked after the run'
+
+# An explicit agent pin is the user's choice and outranks the fallback.
+pinned_status=0
+pinned_output=$(HOME="$runner_home" CLAUDE_CODE_OAUTH_TOKEN=test GOOD_FELLOW_AGENT=claude \
+  GOOD_FELLOW_DRY_RUN=1 "$runner" 2>&1) || pinned_status=$?
+assert_eq "$pinned_status" 1
+printf '%s\n' "$pinned_output" | grep -F 'falling back' >/dev/null &&
+  fail 'a pinned agent was rotated away'
+printf '%s\n' "$pinned_output" | grep -F 'done (status 1)' >/dev/null ||
+  fail 'pinned quota failure did not surface its status'
+
+# Too little of the tick left to restart: report and roll forward, never half-run.
+short_status=0
+short_output=$(HOME="$runner_home" CLAUDE_CODE_OAUTH_TOKEN=test \
+  GOOD_FELLOW_DRY_RUN=1 GOOD_FELLOW_MAX_RUNTIME=200 GOOD_FELLOW_MIN_REVIEW_SECONDS=190 \
+  "$runner" 2>&1) || short_status=$?
+assert_eq "$short_status" 1
+printf '%s\n' "$short_output" | grep -F 'too little to restart' >/dev/null ||
+  fail 'late quota did not report the exhausted tick budget'
+printf '%s\n' "$short_output" | grep -F 'falling back' >/dev/null &&
+  fail 'late quota started a fallback it could not finish'
+
+# Any other agent error stays put: only a quota is safe and useful to retry elsewhere.
+cat > "$runner_home/.local/bin/claude" <<'CLAUDE_ERROR_STUB'
+#!/usr/bin/env bash
+printf 'unexpected internal error\n' >&2
+exit 1
+CLAUDE_ERROR_STUB
+chmod +x "$runner_home/.local/bin/claude"
+error_status=0
+error_output=$(HOME="$runner_home" CLAUDE_CODE_OAUTH_TOKEN=test \
+  GOOD_FELLOW_DRY_RUN=1 "$runner" 2>&1) || error_status=$?
+assert_eq "$error_status" 1
+printf '%s\n' "$error_output" | grep -F 'falling back' >/dev/null &&
+  fail 'a non-quota failure triggered an agent rotation'
+
 # Run the exact deployment-retention block from onboard against controlled names.
 for suffix in 1 2 3 4 5; do
   mkdir -p "$runner_home/.good-fellow/deploy-$suffix"
