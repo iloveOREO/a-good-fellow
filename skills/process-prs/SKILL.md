@@ -333,6 +333,17 @@ create a detached worktree, require exact snapshot HEAD, and obtain the exact ba
 Use the snapshot base for a full review, or a validated marker SHA ancestor for the
 incremental range, always including later conversation.
 
+For the full-review range that starts at the snapshot base, the review diff MUST use
+the merge-base of that base and HEAD — `git diff <base>...<head>` (three-dot), never
+`<base>..<head>` or a file-by-file snapshot comparison against the base tip. This
+does not send the incremental path back to a full diff: a validated marker SHA is
+already an ancestor of HEAD, so two-dot and three-dot ranges are identical there. A
+base branch that advanced after the fork makes a two-dot diff show base-only commits
+as reversed deletions, fabricating "regressions" the PR never made (this misfired on
+a real review once). Cross-check the changed-file list against the GitHub PR Files
+API; a file that appears only in a two-dot diff is base drift, not a PR change, and
+must not be reported as a finding.
+
 A clean verdict requires all of:
 
 1. range provenance and `merge-base --is-ancestor` for incremental work;
