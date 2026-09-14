@@ -1,6 +1,6 @@
 ---
 name: fix-assigned-issues
-description: Find open GitHub issues assigned to the user, clone or worktree the repository without disturbing the user's local checkouts, implement a fix on a dedicated branch, and ship it as a pull request via the create-pr skill. Use for scheduled issue sweeps or when the user asks to work on, fix, or clear their assigned GitHub issues.
+description: Find open GitHub issues assigned to the user, implement and ship fixes when possible, and leave a concrete public explanation whenever a selected issue is declined or cannot be completed. Use for scheduled issue sweeps or when the user asks to work on, fix, or clear their assigned GitHub issues.
 ---
 
 # Fix Assigned Issues
@@ -51,10 +51,11 @@ UPDATED=$(gh api repos/<owner>/<repo>/issues/<n> --jq .updated_at)
 - **exit 3** — the issue changed since staging (new comments, edits), so the saved plan
   may be stale: `"$STAGE" clear <owner> <repo> <n>`, clear the workspace per Step 4's
   recovery, and let the normal sweep below process the issue fresh.
-- **resumes ≥ 3** — the issue has consumed four runs; stop gracefully: post one comment
-  (with marker) summarizing the progress made and suggesting the issue be split or
-  handled interactively, then `"$STAGE" clear` and clear the workspace. Record
-  `clarified` per Step 7 only if the comment succeeds.
+- **resumes ≥ 3** — the issue has consumed four runs; stop gracefully with a `declined`
+  comment per Step 3's "No silent declines": summarize the progress made, say the work
+  was not completed, and suggest the issue be split or handled interactively. Then
+  `"$STAGE" clear` and clear the workspace. Record `declined` per Step 7 only if the
+  comment is confirmed.
 - **otherwise** — resume: read `"$STAGE" notes <owner> <repo> <n>` for the previous
   run's handoff notes, inspect `git -C <workspace> log --oneline`, `status`, and `diff`
   for the actual state, then continue implementing per Step 5 in that workspace. First
@@ -64,9 +65,9 @@ UPDATED=$(gh api repos/<owner>/<repo>/issues/<n> --jq .updated_at)
 
 An issue handled here is finished for this run either way; skip it in the sweep below.
 
-## 3. Filter and short-circuit (idempotence)
+## 3. Classify and short-circuit (idempotence)
 
-For each issue, skip if any of:
+For each issue, stop early if any of:
 
 - an open PR already references it and was authored by the user (`gh pr list --repo
   <owner>/<repo> --search "<number> in:body" --state open`, then check bodies for
@@ -75,7 +76,8 @@ For each issue, skip if any of:
   marker by itself. This is covered `fixed`: record it per Step 7, then stop this item;
 - a `good-fellow/issue-<n>` branch already exists on the remote
   (`gh api repos/<owner>/<repo>/branches/good-fellow/issue-<n>` succeeds) — a branch
-  alone is not covered, so record nothing;
+  alone is not coverage. If no open closing PR explains it, follow the declined-item
+  rule below instead of silently skipping;
 - the issue is a question/discussion rather than an actionable code change — reply
   with the answer instead (marker appended), then record `answered` only on success;
 - the issue is too ambiguous to act on safely: post one clarifying comment (marker),
@@ -83,6 +85,48 @@ For each issue, skip if any of:
 
 If idempotence finds an authenticated-user answer or clarification that still covers
 the latest issue state, record the matching outcome instead of posting a duplicate.
+
+### No silent declines
+
+Once this skill selects an issue for classification or work, that item must end in one
+of four visible outcomes: `fixed`, `answered`, `clarified`, or `declined`. If for
+**any reason** it will not produce one of the first three outcomes in this run, post a
+comment on the issue before moving on. This requirement overrides the generic
+time-box instruction in conventions §6 to merely note a skipped item in the run
+report.
+
+The `declined` comment must:
+
+- plainly say that the issue was not completed or accepted for implementation in this
+  run;
+- give the concrete reason for that decision and why it prevents a safe or correct
+  result, including verified facts, risks, or failed checks that informed it;
+- state what condition, evidence, or next step would make further work possible when
+  known; and
+- append the good-fellow marker.
+
+This applies to every non-completion cause, including safety or security risk,
+insufficient validation conditions, failed tests, unsupported or out-of-scope work,
+insufficient time after work has begun, an unexplained remote work branch, repository
+or permission failures, and a failed delivery step. Staging unfinished work for the
+next sweep (Step 5) is a deferral, not an exemption: it still requires the visible
+comment described there. Do not substitute a local run-log
+entry for the issue comment. Do not expose credentials, private environment details,
+or other sensitive diagnostic data in the explanation.
+
+Before posting, check for an authenticated-user marked `declined` comment that still
+covers the current issue state and the same reason. If one exists, reuse it and record
+`declined`; do not post a duplicate. Record `declined` only after the comment is
+confirmed. If GitHub rejects the comment or the subject cannot be safely reverified,
+record no receipt, leave the notification unread, report the failed comment, and let a
+later sweep retry. An untouched queue tail that was never selected is not a declined
+item and receives no bulk comment.
+
+Capture the confirmed comment's numeric id — from the API response when posting
+(`gh api ... comments -f body=... --jq .id`), or from the reused existing comment when
+idempotence found one — as `DECLINE_COMMENT_ID`. Step 7 persists it with the receipt so
+cleanup can independently re-fetch and re-verify that exact comment, instead of relying
+only on the aggregate subject digest matching.
 
 ## 4. Get a workspace
 
@@ -123,11 +167,20 @@ working tree (conventions §3).
   utilities rather than adding new ones.
 - Run the repo's tests (or at least those covering the touched area) when a test
   command is discoverable (CI config, package scripts, Makefile) and cheap to run. A
-  fix with failing tests must not be shipped — fix or report instead.
+  fix with failing tests must not be shipped — fix it or post a `declined` comment
+  explaining the failure and why shipping would be unsafe.
 - Time-box per conventions §6; if the issue is too large for one run, stage it instead
-  of discarding the progress. Commit the work-in-progress locally (never push), write
-  a short handoff note to a temp file — what is understood, what is done, what remains,
-  and the next concrete step, for a reader with no memory of this run — then:
+  of discarding the progress, and reserve enough time to publish the visible outcome.
+  Do not begin another issue unless there is enough time to publish its outcome.
+  Commit the work-in-progress locally (never push), write a short handoff note to a
+  temp file — what is understood, what is done, what remains, and the next concrete
+  step, for a reader with no memory of this run — then post a `declined` comment per
+  Step 3's "No silent declines" saying the work is in progress but not completed this
+  run, what is done and what remains, and that the next sweep will resume it. On a
+  re-stage, reuse an existing authenticated-user marked comment only if it still
+  describes the current progress; otherwise post a fresh one. Capture its id as
+  `DECLINE_COMMENT_ID`, then — only after the comment is confirmed, since it bumps
+  `updated_at` — save the stage:
 
   ```bash
   BASE=$(git -C <workspace> merge-base HEAD "origin/<default>")
@@ -136,7 +189,8 @@ working tree (conventions §3).
   ```
 
   Leave the workspace and local branch in place; the next run resumes them via Step 2.
-  Staging is a deferral, not coverage — no receipt, but note it in the report.
+  Staging is a deferral; it is covered only by the confirmed `declined` comment, which
+  Step 7 records with `DECLINE_COMMENT_ID`. Note the stage in the report.
 
 ## 6. Ship
 
@@ -167,8 +221,12 @@ OBSERVATION=$("$RECEIPTS" observe issue "$REPO_URL" <number> "$THREAD_ID")
 IFS=$'\t' read -r OBSERVED LAST_READ <<< "$OBSERVATION"
 # Refetch the complete issue/comments, re-prove the outcome, then take one proof.
 SUBJECT_PROOF=$("$RECEIPTS" subject-proof issue "$REPO_URL" <number>)
+# `declined` persists the confirmed comment's numeric id as HEAD so cleanup can
+# independently re-verify that exact comment; every other outcome passes `-`.
+HEAD=-
+[ "<outcome>" != declined ] || HEAD="$DECLINE_COMMENT_ID"
 "$RECEIPTS" record issue "$REPO_URL" <number> "$THREAD_ID" \
-  "$OBSERVED" "$LAST_READ" <outcome> - "$SUBJECT_PROOF"
+  "$OBSERVED" "$LAST_READ" <outcome> "$HEAD" "$SUBJECT_PROOF"
 ```
 
 One `subject-proof` call suffices: the helper already double-captures and compares
@@ -181,14 +239,22 @@ actually rejects a subject that moved meanwhile.
   verified to cover the issue's latest state.
 - `clarified`: the clarifying comment succeeded, or a current authenticated-user
   clarification is verified to cover the issue's latest state.
+- `declined`: a concrete refusal/non-completion comment satisfying Step 3 succeeded,
+  or a current authenticated-user marked comment with the same reason is verified to
+  cover the issue's latest state. Its numeric comment id is recorded as HEAD so
+  cleanup can independently re-verify that exact comment.
 
 A remote branch alone, an attempted/failed action, incomplete evidence, failed tests,
-or a time-budget deferral (staged or not) is not coverage and gets no receipt. If the
-notification changes after observation, final cleanup will reject the old version. Missing threads,
-observation/reverification failures, and receipt failures leave notifications unread;
-report them without blocking later issues. `reply-notifications` owns mark-read writes.
+or a time-budget deferral (staged or not) is not coverage by itself; each becomes
+covered only after the required `declined` comment is successfully posted and
+reverified. If the notification changes after observation, final cleanup will reject
+the old version. Missing threads, observation/reverification failures, comment
+failures, and receipt failures leave notifications unread; report them without
+blocking later issues. `reply-notifications` owns mark-read writes.
 
 ## 8. Report
 
-Tally: PRs opened (links), issues answered/clarified, issues staged or resumed (with
-resume count), covered receipts, skipped (with reason), and receipt failures.
+Tally: PRs opened (links), issues answered/clarified, issues declined (links and
+reasons), issues staged or resumed (with resume count and comment links), untouched
+queue tail, covered receipts, comment failures, and receipt failures. A selected issue
+must never appear only as "skipped" in this report.
