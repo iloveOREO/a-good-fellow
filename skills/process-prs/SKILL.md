@@ -179,6 +179,15 @@ edit/test; on mismatch clear any handoff, clean up, recapture, and restart this 
 without advancing. Handle all CI and feedback together, test, commit, and plain-push
 once—never force, rebase, or retry a stale decision.
 
+**create-pr's base-sync step does not apply here.** That step exists because a branch
+about to become a *new* PR must not open behind its base. This branch is already the
+head of an open PR: rebasing it onto a newer base would rewrite published history and
+need a force-push (conventions §3 and §6), and merging the base in would add a merge
+commit to the user's PR that nobody asked for. A branch that actually conflicts with its
+base is a live mergeability gate, so it routes to the `ci-waiting` / gate-waiting
+outcome above—never to a base-sync push. Push only what the fix itself changed, from the
+exact snapshot HEAD.
+
 Push before claiming a fix. Before every comment/reply/thread resolution, verify the
 current snapshot. After a push or any conversation mutation, capture a new complete
 snapshot, require the expected HEAD, and rebuild the ledger before the next mutation.
@@ -324,6 +333,17 @@ create a detached worktree, require exact snapshot HEAD, and obtain the exact ba
 Use the snapshot base for a full review, or a validated marker SHA ancestor for the
 incremental range, always including later conversation.
 
+For the full-review range that starts at the snapshot base, the review diff MUST use
+the merge-base of that base and HEAD — `git diff <base>...<head>` (three-dot), never
+`<base>..<head>` or a file-by-file snapshot comparison against the base tip. This
+does not send the incremental path back to a full diff: a validated marker SHA is
+already an ancestor of HEAD, so two-dot and three-dot ranges are identical there. A
+base branch that advanced after the fork makes a two-dot diff show base-only commits
+as reversed deletions, fabricating "regressions" the PR never made (this misfired on
+a real review once). Cross-check the changed-file list against the GitHub PR Files
+API; a file that appears only in a two-dot diff is base drift, not a PR change, and
+must not be reported as a finding.
+
 A clean verdict requires all of:
 
 1. range provenance and `merge-base --is-ancestor` for incremental work;
@@ -337,6 +357,12 @@ A clean verdict requires all of:
 
 Look only for critical correctness, data, security, compatibility, or concurrency
 issues—not summaries or nits. A publishable finding must be absent from the ledger.
+A finding that argues by analogy ("route X lacks the guard its sibling Y has") must
+first prove X and Y are functionally equivalent by reading both handlers to their
+implementations—never by path, prefix, or name similarity, which vendor/brand naming
+routinely collides with (e.g. a gateway literally named "Payout" versus earnings
+payouts). If the handlers differ in purpose, drop the analogy and either restate the
+concern against a comparator verified equivalent or on the endpoint's own merits.
 
 After actually judging an issue comment or inline review comment and recording its
 root cause in the current ledger/payload, mark that exact comment seen when its

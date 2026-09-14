@@ -389,17 +389,25 @@ if [ -x "$MAINTENANCE_TOOL" ]; then
   esac
 fi
 
+# Availability is a function rather than a one-shot if/elif chain because a usage
+# quota can retire the preferred CLI mid-tick, and the fallback below has to ask the
+# same question again about a different candidate.
+agent_available() {
+  case "$1" in
+    claude) command -v claude >/dev/null 2>&1 &&
+            { [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || [ -s "$HOME/.claude/.credentials.json" ]; } ;;
+    codex)  command -v codex >/dev/null 2>&1 && [ -s "$HOME/.codex/auth.json" ] ;;
+    cursor) command -v cursor-agent >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
 AGENT="${GOOD_FELLOW_AGENT:-}"
 if [ -z "$AGENT" ]; then
-  if command -v claude >/dev/null 2>&1 && { [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || [ -s "$HOME/.claude/.credentials.json" ]; }; then
-    AGENT=claude
-  elif command -v codex >/dev/null 2>&1 && [ -s "$HOME/.codex/auth.json" ]; then
-    AGENT=codex
-  elif command -v cursor-agent >/dev/null 2>&1; then
-    AGENT=cursor
-  else
-    log "FATAL: no authenticated agent CLI (claude/codex/cursor-agent); run onboard"; exit 78
-  fi
+  for AGENT_CANDIDATE in claude codex cursor; do
+    if agent_available "$AGENT_CANDIDATE"; then AGENT=$AGENT_CANDIDATE; break; fi
+  done
+  [ -n "$AGENT" ] || { log "FATAL: no authenticated agent CLI (claude/codex/cursor-agent); run onboard"; exit 78; }
 fi
 case "$AGENT" in claude|codex|cursor) ;; *) log "FATAL: invalid GOOD_FELLOW_AGENT: $AGENT"; exit 64 ;; esac
 log "agent CLI: $AGENT"
@@ -440,24 +448,63 @@ No user is present: never wait for input, prefer skipping over guessing, and fin
 with one consolidated report of everything done and skipped."
 [ "${GOOD_FELLOW_DRY_RUN:-0}" = "1" ] && PROMPT='Reply with exactly: good-fellow dry run ok. Do nothing else.'
 
-TIMEOUT_CMD=""
-command -v timeout  >/dev/null 2>&1 && TIMEOUT_CMD="timeout --kill-after=30 $MAX_RUNTIME"
-command -v gtimeout >/dev/null 2>&1 && [ -z "$TIMEOUT_CMD" ] && TIMEOUT_CMD="gtimeout --kill-after=30 $MAX_RUNTIME"
+# Parameterised by seconds so a fallback run inherits only the time this tick has
+# left, never a fresh full MAX_RUNTIME that would overrun the cron cadence.
+timeout_cmd_for() {
+  if command -v timeout >/dev/null 2>&1; then printf 'timeout --kill-after=30 %s' "$1"
+  elif command -v gtimeout >/dev/null 2>&1; then printf 'gtimeout --kill-after=30 %s' "$1"
+  fi
+}
+TIMEOUT_CMD=$(timeout_cmd_for "$MAX_RUNTIME")
 
 # 9>&- everywhere: the agent (and anything it leaks) must never inherit the lock fd.
 # --add-dir "$HOME": sweeps clone into ~/<repo> and work in ~/.good-fellow/worktrees,
 # both outside REPO_DIR; without it those writes are blocked and nobody is present to
 # approve them, so the run would fail silently.
+run_agent() {
+  case "$1" in
+    claude) $TIMEOUT_CMD claude -p "$PROMPT" --add-dir "$HOME" \
+              --disable-slash-commands \
+              --allowedTools Bash Read Grep Glob Write Edit MultiEdit TodoWrite 9>&- ;;
+    codex)  CODEX_HOME="$DEPLOY_DIR/codex-home" $TIMEOUT_CMD codex exec \
+              --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox \
+              "$PROMPT" 9>&- ;;
+    cursor) $TIMEOUT_CMD cursor-agent --print --force "$PROMPT" 9>&- ;;
+  esac
+}
+
+# A usage quota is the one agent failure worth retrying on a different CLI: the sweep
+# is re-entrant (every marker is posted only after the action it records succeeded),
+# and a quota rejection costs seconds, so the tick still has nearly its whole budget.
+# Timeouts are excluded on purpose — that work already spent the budget and a rerun
+# would only time out again. The output is teed because the exit code alone cannot
+# tell a quota rejection apart from any other agent error.
+agent_hit_quota() {
+  grep -Eqi "(reached|hit) your [^.]*limit|usage limit reached" "$1"
+}
+
 cd "$REPO_DIR"; STATUS=0
-case "$AGENT" in
-  claude) $TIMEOUT_CMD claude -p "$PROMPT" --add-dir "$HOME" \
-            --disable-slash-commands \
-            --allowedTools Bash Read Grep Glob Write Edit MultiEdit TodoWrite 9>&- || STATUS=$? ;;
-  codex)  CODEX_HOME="$DEPLOY_DIR/codex-home" $TIMEOUT_CMD codex exec \
-            --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox \
-            "$PROMPT" 9>&- || STATUS=$? ;;
-  cursor) $TIMEOUT_CMD cursor-agent --print --force "$PROMPT" 9>&- || STATUS=$? ;;
-esac
+AGENT_OUT="$STATE_DIR/.agent-output"   # single writer: this run already holds the lock
+run_agent "$AGENT" 2>&1 | tee "$AGENT_OUT" 9>&- || STATUS=$?
+
+# An explicit GOOD_FELLOW_AGENT pin outranks the fallback; only auto-selection rotates.
+if [ -z "${GOOD_FELLOW_AGENT:-}" ]; then
+  for AGENT_CANDIDATE in claude codex cursor; do
+    case "$STATUS" in 0|124|137) break ;; esac
+    agent_hit_quota "$AGENT_OUT" || break
+    if [ "$AGENT_CANDIDATE" = "$AGENT" ] || ! agent_available "$AGENT_CANDIDATE"; then continue; fi
+    REMAINING=$((GOOD_FELLOW_RUN_DEADLINE_EPOCH - $(date +%s)))
+    if [ "$REMAINING" -le $((GOOD_FELLOW_MIN_REVIEW_SECONDS + 120)) ]; then
+      log "$AGENT hit a usage quota; ${REMAINING}s left is too little to restart; rolls to next tick"
+      break
+    fi
+    log "$AGENT hit a usage quota; falling back to $AGENT_CANDIDATE with ${REMAINING}s left"
+    TIMEOUT_CMD=$(timeout_cmd_for "$REMAINING")
+    AGENT=$AGENT_CANDIDATE; STATUS=0
+    run_agent "$AGENT" 2>&1 | tee "$AGENT_OUT" 9>&- || STATUS=$?
+  done
+fi
+rm -f "$AGENT_OUT"
 
 if [ "$STATUS" = 124 ] || [ "$STATUS" = 137 ]; then
   log "hit the ${MAX_RUNTIME}s timeout; rest rolls to next tick"

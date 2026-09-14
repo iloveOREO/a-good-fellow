@@ -140,13 +140,16 @@ working tree (conventions §3).
 
 ## 6. Ship
 
-Invoke the **create-pr** skill on the worktree (it reviews the diff, commits, pushes,
-and opens the PR with `Fixes #<n>` and the marker). Then comment on the issue linking
-the PR, with the marker. On success run `"$STAGE" clear <owner> <repo> <n>` (a no-op
-unless the issue was staged), then remove the worktree AND delete the local branch —
-the PR and the remote branch carry the work, while a leftover local branch only sets
-a trap for the user's next `git checkout <branch>` (it wins over the remote branch
-and may be stale):
+Invoke the **create-pr** skill on the worktree (it reviews the diff, commits, replays
+the branch onto the current base tip, pushes, and opens the PR with `Fixes #<n>` and the
+marker). Then comment on the issue linking the PR, with the marker. If create-pr
+abandons the run on a base conflict it cannot resolve mechanically, nothing was pushed
+and there is no PR to link: leave the issue for the next sweep, keep any stage entry
+in place (do not `clear` it), record no receipt, and report the conflicting paths. On
+success run `"$STAGE" clear <owner> <repo> <n>` (a no-op unless the issue was staged),
+then remove the worktree AND delete the local branch — the PR and the remote branch
+carry the work, while a leftover local branch only sets a trap for the user's next
+`git checkout <branch>` (it wins over the remote branch and may be stale):
 
 ```bash
 git -C ~/<repo> worktree remove ~/.good-fellow/worktrees/<repo>-issue-<n>
