@@ -43,7 +43,7 @@ the gist and this repository every 48 hours by default, outside model context; t
 | [`fix-assigned-issues`](skills/fix-assigned-issues/SKILL.md) | every sweep | fix issues assigned to you, open PRs |
 | [`join-discussions`](skills/join-discussions/SKILL.md) | every sweep | answer Discussions that @mention you |
 | [`reply-notifications`](skills/reply-notifications/SKILL.md) | every sweep | final triage and receipt-aware cleanup |
-| [`create-pr`](skills/create-pr/SKILL.md) | helper + manual | commit, push, open a PR |
+| [`create-pr`](skills/create-pr/SKILL.md) | helper + manual | commit, sync onto the current base, push, open a PR |
 | [`check-status`](skills/check-status/SKILL.md) | manual | health of the automation |
 | [`sync-instructions`](skills/sync-instructions/SKILL.md) | manual | pull/edit/push your instruction gist |
 

@@ -48,11 +48,100 @@ git -C <worktree> -c user.name="$GF_NAME" -c user.email="$GF_MAIL" commit -F <me
 Never a bare `git commit` (opens an editor) and never `git config` inside a worktree
 (it rewrites the user's shared `.git/config`) — see conventions §6.
 
-## 4. Push and open the PR
+## 4. Sync onto the current base
+
+The branch was created from a base tip that may be far behind by now — a long run, or
+work resumed from a handoff — so replay it onto the current tip **before** the push.
+Skipping this is what makes a freshly opened PR arrive already behind and conflicting.
+
+Take the base from validated repository data, never from issue or PR text (conventions
+§2), and fetch it into a private ref so it can never collide with a branch the user has
+checked out (conventions §3):
+
+```bash
+# the base the PR will target: the repo default, resolved from the worktree's
+# own remote so this never depends on the runner's unrelated current directory
+BASE=$(gh repo view "$(git -C <worktree> remote get-url origin)" \
+  --json defaultBranchRef --jq .defaultBranchRef.name)
+git -C <worktree> fetch origin "$BASE:refs/good-fellow/base/$BASE" --force
+```
+
+Never fetch into a local branch name (`git fetch origin "<base>:<base>"`) — that write
+is exactly what conventions §3 forbids against a checkout the user may have open.
+
+How to replay depends on whether an earlier tick already published this branch
+(`git -C <worktree> ls-remote --exit-code --heads origin "<branch>"`):
+
+| Branch on origin | Action |
+|---|---|
+| absent (the normal case) | rebase onto the fetched tip |
+| present | **never rebase** — rewriting a published branch needs a force-push, forbidden by conventions §3 and §6. Merge the base tip in instead, which keeps the push fast-forward |
+
+```bash
+GIT_EDITOR=true git -C <worktree> -c user.name="$GF_NAME" -c user.email="$GF_MAIL" \
+  rebase "refs/good-fellow/base/$BASE"
+# published branch instead:
+GIT_EDITOR=true git -C <worktree> -c user.name="$GF_NAME" -c user.email="$GF_MAIL" \
+  merge --no-edit "refs/good-fellow/base/$BASE"
+```
+
+Both write commits, so both need the same per-command identity as §3 and must never
+reach an editor (conventions §6): `--no-edit` on the merge, no interactive rebase, and
+no bare `git commit` to conclude one.
+
+If the replay moved the branch, the diff reviewed in §2 is no longer the diff that will
+be merged: re-run whatever checks were already run and describe *that* run under "How it
+was verified". If the replay leaves nothing to ship (every change is already in the new
+base), push nothing, open no PR, and report the work as already fixed upstream.
+
+### When the replay conflicts
+
+Nobody is available to resolve it (conventions §6), so resolve only what needs no
+judgement:
+
+- git reports the patch as empty because the change already landed upstream →
+  `git -C <worktree> rebase --skip`;
+- the conflict is confined to a generated file (lockfile, snapshot, checked-in build
+  output) **and** the repository documents a regeneration command that runs offline:
+  take the base's version, regenerate, and verify the output is exactly what the
+  generator produces. Not reproducible means not mechanical.
+
+Everything else — overlapping edits, delete/modify, rename/modify, binary files, any
+resolution where you would have to pick between two intents — is a judgement call.
+Never use `-X ours`/`-X theirs`, never `--skip` a non-empty patch, and never drop either
+side's edits just to make the replay apply.
+
+Abandon the run rather than shipping a guessed merge:
+
+```bash
+git -C <worktree> rebase --abort   # or: git -C <worktree> merge --abort
+```
+
+- Push nothing, open no PR, and post no comment claiming a fix. Conventions §5 records
+  the action only after it succeeds, so an abandoned run leaves the item untouched and
+  the next sweep re-derives the fix against the base as it stands then.
+- Never delete a branch an earlier tick already published.
+- Per conventions §3 a failed run leaves its worktree in place for inspection; the next
+  run recovers that path itself (`git worktree remove --force` + `git worktree prune`,
+  plus `git branch -D` for our own `good-fellow/*` branch).
+- Name the conflicting paths in the report, so an item that keeps getting stuck here
+  stays visible instead of silently vanishing from every sweep.
+
+## 5. Push and open the PR
 
 ```bash
 git push -u origin <branch>
-gh pr create --title "<title>" --body-file <tmpfile> --base <default-branch>
+gh pr create --title "<title>" --body-file <tmpfile> --base "$BASE"
+```
+
+A plain push is refused if someone advanced the branch meanwhile; that rejection is the
+protection, not a problem to solve (conventions §3). Do not force-push and do not retry
+the decision onto the new tip — abandon as in §4 and let the next sweep recapture state.
+
+Once the push succeeded, drop the private base ref:
+
+```bash
+git -C <worktree> update-ref -d "refs/good-fellow/base/$BASE"
 ```
 
 Body structure (language per gist / repo norms):
@@ -66,6 +155,7 @@ Body structure (language per gist / repo norms):
 No boilerplate beyond that; do not enable auto-merge; do not request reviewers unless
 the gist says to.
 
-## 5. Report
+## 6. Report
 
-Return the PR URL and the commit SHA(s).
+Return the PR URL and the commit SHA(s), and say whether the branch was rebased or
+merged onto a newer base tip.
