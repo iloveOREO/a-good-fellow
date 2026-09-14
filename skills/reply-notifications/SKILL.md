@@ -107,6 +107,15 @@ For an open Issue receipt with outcome `fixed`, also re-prove that a currently o
 PR authored by the authenticated user still contains an exact `Fixes #N` or
 `Closes #N` reference for that repository. A closed PR or removed closing keyword
 invalidates the receipt even when the Issue digest itself is unchanged.
+An Issue receipt with outcome `declined` additionally persists the decline comment's
+numeric id as HEAD. Before accepting it, independently re-fetch that exact comment
+(`gh api repos/<owner>/<repo>/issues/comments/<HEAD>`) and require it still exists,
+its `.user.login` equals the authenticated user's login (`gh api user --jq .login`),
+and its body still contains the good-fellow marker. This directly re-verifies the
+comment the owner sweep posted rather than relying on the aggregate subject digest
+alone: a deleted comment, one edited away from the marker, or one authored by
+someone else invalidates the receipt even when the rest of the issue digest is
+unchanged.
 
 Only then refresh the notification thread in the same compact shape and repeat exact
 lookup; changed `updated_at` also goes to Pass B. Thus a receipt covers both one
