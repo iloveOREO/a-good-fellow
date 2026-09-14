@@ -346,6 +346,12 @@ A clean verdict requires all of:
 
 Look only for critical correctness, data, security, compatibility, or concurrency
 issues—not summaries or nits. A publishable finding must be absent from the ledger.
+A finding that argues by analogy ("route X lacks the guard its sibling Y has") must
+first prove X and Y are functionally equivalent by reading both handlers to their
+implementations—never by path, prefix, or name similarity, which vendor/brand naming
+routinely collides with (e.g. a gateway literally named "Payout" versus earnings
+payouts). If the handlers differ in purpose, drop the analogy and either restate the
+concern against a comparator verified equivalent or on the endpoint's own merits.
 
 After actually judging an issue comment or inline review comment and recording its
 root cause in the current ledger/payload, mark that exact comment seen when its
