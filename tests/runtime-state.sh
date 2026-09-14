@@ -141,18 +141,35 @@ export PATH="$stub_bin:$PATH"
 export STUB_COUNT_FILE="$TEMP_ROOT/gh-count"
 export STUB_POST_LOG="$TEMP_ROOT/gh-posts"
 
-# A declined Issue is covered only through the explicit owner-sweep outcome. The
-# receipt helper must accept and round-trip it so final notification cleanup can
-# consume the exact commented subject/version without causing duplicate comments.
+# A declined Issue is covered only through the explicit owner-sweep outcome, and
+# only when it carries the decline comment's id: cleanup independently re-fetches
+# and re-verifies that exact comment rather than trusting the aggregate subject
+# digest alone. The receipt helper must accept and round-trip both the outcome and
+# the comment id so final notification cleanup can consume the exact commented
+# subject/version without causing duplicate comments.
 export STUB_MODE=receipt
 declined_receipt_state="$TEMP_ROOT/declined-receipt-state"
 GOOD_FELLOW_STATE_DIR="$declined_receipt_state" GOOD_FELLOW_RUN_STARTED_AT_EPOCH=test-declined \
   "$RECEIPTS" record issue https://api.github.com/repos/acme/app 1 1 \
-  2026-08-19T00:00:00Z - declined - "$proof"
+  2026-08-19T00:00:00Z - declined 42 "$proof"
 declined_row=$(GOOD_FELLOW_STATE_DIR="$declined_receipt_state" \
   "$RECEIPTS" lookup issue https://api.github.com/repos/acme/app 1 1 \
   2026-08-19T00:00:00Z -)
 assert_eq "$(printf '%s\n' "$declined_row" | cut -f7)" declined
+assert_eq "$(printf '%s\n' "$declined_row" | cut -f8)" 42
+
+# A `declined` receipt with no comment id is not independently reverifiable, so it
+# must be rejected at record time rather than accepted as silent coverage.
+set +e
+GOOD_FELLOW_STATE_DIR="$TEMP_ROOT/declined-no-comment-state" GOOD_FELLOW_RUN_STARTED_AT_EPOCH=test-declined-bad \
+  "$RECEIPTS" record issue https://api.github.com/repos/acme/app 1 1 \
+  2026-08-19T00:00:00Z - declined - "$proof" \
+  > "$TEMP_ROOT/declined-no-comment.out" 2> "$TEMP_ROOT/declined-no-comment.err"
+declined_no_comment_status=$?
+set -e
+assert_eq "$declined_no_comment_status" 64
+grep -F 'declined outcome requires a comment id' "$TEMP_ROOT/declined-no-comment.err" >/dev/null ||
+  fail 'declined receipt without a comment id failed for the wrong reason'
 
 make_marker_body() {
   local snapshot=$1 action=$2 verdict=$3 output=$4 first_line=$5

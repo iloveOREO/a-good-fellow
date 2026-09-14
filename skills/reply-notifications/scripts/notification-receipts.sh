@@ -185,10 +185,20 @@ case "$mode" in
       discussion:answered|discussion:no-response-needed) ;;
       *) printf 'notification-receipts: invalid covered outcome\n' >&2; exit 64 ;;
     esac
-    if [ "$9" != - ]; then
-      case "$9" in ''|*[!0-9a-f]*) printf 'notification-receipts: invalid head\n' >&2; exit 64 ;; esac
-      [ "${#9}" -eq 40 ] || { printf 'notification-receipts: invalid head\n' >&2; exit 64; }
-    fi
+    case "$2:$8" in
+      issue:declined)
+        # HEAD carries the declined comment's numeric id here instead of a commit
+        # SHA, so cleanup can independently re-fetch and re-verify that exact
+        # comment rather than trusting the aggregate subject digest alone.
+        case "$9" in ''|0|*[!0-9]*) printf 'notification-receipts: declined outcome requires a comment id\n' >&2; exit 64 ;; esac
+        ;;
+      *)
+        if [ "$9" != - ]; then
+          case "$9" in ''|*[!0-9a-f]*) printf 'notification-receipts: invalid head\n' >&2; exit 64 ;; esac
+          [ "${#9}" -eq 40 ] || { printf 'notification-receipts: invalid head\n' >&2; exit 64; }
+        fi
+        ;;
+    esac
     case "${10}" in ''|*[!0-9a-f]*) printf 'notification-receipts: invalid subject proof\n' >&2; exit 64 ;; esac
     [ "${#10}" -eq 64 ] || { printf 'notification-receipts: invalid subject proof\n' >&2; exit 64; }
     current_observed=$("$0" observe "$2" "$3" "$4" "$5")

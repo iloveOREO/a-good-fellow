@@ -81,6 +81,12 @@ record no receipt, leave the notification unread, report the failed comment, and
 later sweep retry. An untouched queue tail that was never selected is not a declined
 item and receives no bulk comment.
 
+Capture the confirmed comment's numeric id — from the API response when posting
+(`gh api ... comments -f body=... --jq .id`), or from the reused existing comment when
+idempotence found one — as `DECLINE_COMMENT_ID`. Step 6 persists it with the receipt so
+cleanup can independently re-fetch and re-verify that exact comment, instead of relying
+only on the aggregate subject digest matching.
+
 ## 3. Get a workspace
 
 Follow conventions §3 exactly: fresh clone to `~/<repo>`, or a worktree under
@@ -153,8 +159,12 @@ OBSERVATION=$("$RECEIPTS" observe issue "$REPO_URL" <number> "$THREAD_ID")
 IFS=$'\t' read -r OBSERVED LAST_READ <<< "$OBSERVATION"
 # Refetch the complete issue/comments, re-prove the outcome, then take one proof.
 SUBJECT_PROOF=$("$RECEIPTS" subject-proof issue "$REPO_URL" <number>)
+# `declined` persists the confirmed comment's numeric id as HEAD so cleanup can
+# independently re-verify that exact comment; every other outcome passes `-`.
+HEAD=-
+[ "<outcome>" != declined ] || HEAD="$DECLINE_COMMENT_ID"
 "$RECEIPTS" record issue "$REPO_URL" <number> "$THREAD_ID" \
-  "$OBSERVED" "$LAST_READ" <outcome> - "$SUBJECT_PROOF"
+  "$OBSERVED" "$LAST_READ" <outcome> "$HEAD" "$SUBJECT_PROOF"
 ```
 
 One `subject-proof` call suffices: the helper already double-captures and compares
@@ -169,7 +179,8 @@ actually rejects a subject that moved meanwhile.
   clarification is verified to cover the issue's latest state.
 - `declined`: a concrete refusal/non-completion comment satisfying Step 2 succeeded,
   or a current authenticated-user marked comment with the same reason is verified to
-  cover the issue's latest state.
+  cover the issue's latest state. Its numeric comment id is recorded as HEAD so
+  cleanup can independently re-verify that exact comment.
 
 A remote branch alone, an attempted/failed action, incomplete evidence, failed tests,
 or a time-budget deferral is not coverage by itself; each becomes covered only after
