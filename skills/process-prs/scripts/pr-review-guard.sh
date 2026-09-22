@@ -64,7 +64,7 @@ validate_snapshot_file() {
   local lines
   validate_regular_file "$1" 'snapshot file'
   lines=$(wc -l < "$1" | tr -d ' ')
-  [ "$lines" -eq 12 ] || die "snapshot must contain exactly 12 lines, found $lines"
+  [ "$lines" -eq 13 ] || die "snapshot must contain exactly 13 lines, found $lines"
 }
 
 QUERY='query($o:String!,$r:String!,$n:Int!){
@@ -159,7 +159,12 @@ QUERY='query($o:String!,$r:String!,$n:Int!){
 # only for migration, and line twelve is the external item index: one
 # `kind|id|author|created|updated` entry per stable conversation item, so a token
 # mismatch can name exactly which comment/review/thread changed instead of leaving
-# the caller to guess that only HEAD moved. The token inputs deliberately strip the viewer's own
+# the caller to guess that only HEAD moved. Line thirteen lists the node IDs of
+# every issue/thread comment the viewer has not marked seen (👀), excluding the
+# viewer's own marker posts and minimized comments, or `-` when none remain; a
+# clean outcome refuses while any remain, because approving past a comment that
+# was never judged is exactly how a user's own open concern got overridden. The
+# token inputs deliberately strip the viewer's own
 # good-fellow:v1 marker reviews/comments so posting a marker does not invalidate
 # its own token; snapshot_state hashes those filtered captures before writing the
 # file, so only the digests exist on lines nine/eleven and the sole readable PR
@@ -399,6 +404,16 @@ else
           (.comments[] | "thread-comment|\(.id)|\(.author // "-")|\(.createdAt)|\(.lastEditedAt // .updatedAt // "-")")),
         ($x.reviewDismissals[] | "dismissal|\(.id)|\(.actor // "-")|\(.createdAt)|-")
       ] | map(gsub("\\s"; "_")) | sort | join(" ")
+    ),
+    (
+      $full.pullRequest as $f |
+      [
+        ($f.comments[], $f.reviewThreads[].comments[]) |
+        select(.seen | not) |
+        select(.isMinimized | not) |
+        select((.author != $viewer) or (((.body // "") | contains("good-fellow:v1")) | not)) |
+        .id
+      ] | sort | if length == 0 then "-" else join(",") end
     )
   ] | .[])
 end'
@@ -428,7 +443,7 @@ snapshot_state() {
   fi
 
   lines=$(wc -l < "$SNAPSHOT_CORE_TEMP" | tr -d ' ')
-  [ "$lines" -eq 14 ] || die "internal snapshot must contain exactly 14 lines, found $lines"
+  [ "$lines" -eq 15 ] || die "internal snapshot must contain exactly 15 lines, found $lines"
   head=$(sed -n '1p' "$SNAPSHOT_CORE_TEMP")
   base=$(sed -n '2p' "$SNAPSHOT_CORE_TEMP")
   strict_clean=$(sed -n '6p' "$SNAPSHOT_CORE_TEMP")
@@ -495,11 +510,12 @@ snapshot_state() {
     fi
   fi
 
-  # Emit the 12-line snapshot. The filtered token inputs on internal lines 9/11
+  # Emit the 13-line snapshot. The filtered token inputs on internal lines 9/11
   # are reduced to their sha-256 digests here so the only readable PR JSON in
   # the file is the complete ledger on line 10 — a consumer can no longer grab
   # a filtered capture by mistake. Internal lines 12/13 feed only the CI
-  # fallback above; internal line 14 becomes the item index on line 12.
+  # fallback above; internal lines 14/15 become the item index and unseen list
+  # on lines 12/13.
   local out_line line_no=0
   while IFS= read -r out_line; do
     line_no=$((line_no + 1))
@@ -758,6 +774,11 @@ case "$mode" in
       [ "$ci_clean" = true ] || die 'clean comment requires conclusively successful CI'
       [ "$threads_clean" = true ] || die 'clean comment requires all review threads resolved'
       [ "$dismissal_clear" = true ] || die 'clean comment cannot override a current-head dismissed approval'
+    fi
+    # Approval (always clean) and a clean comment both assert nothing is left open.
+    if [ "$BODY_VERDICT" = clean ]; then
+      unseen=$(snapshot_line "$VERIFY_TEMP" 13)
+      [ "$unseen" = - ] || die "clean outcome requires every comment judged and marked seen; unseen: $unseen"
     fi
     if enforce_stop_epoch; then :; else status=$?; exit "$status"; fi
     # No GitHub or code reads are allowed between the successful verification

@@ -109,6 +109,8 @@ if [ "${1:-}" = api ] && [ "${2:-}" = graphql ]; then
   if [ "${STUB_MODE:-waiting}" = approval ] && [ "$count" -ge 2 ]; then ci=true; fi
   stable='{"pullRequest":{"stable":"same"}}'
   index='pr|PR_1|author|2026-08-19T00:00:00Z|-'
+  unseen=-
+  if [ "${STUB_MODE:-waiting}" = unseen ]; then ci=true; unseen=IC_open; fi
   if [ "${STUB_MODE:-waiting}" = drift ]; then
     stable="{\"pullRequest\":{\"stable\":$count}}"
   fi
@@ -130,7 +132,8 @@ if [ "${1:-}" = api ] && [ "${2:-}" = graphql ]; then
     "{\"pullRequest\":{\"legacyMergeVersion\":$count}}" \
     false \
     - \
-    "$index"
+    "$index" \
+    "$unseen"
   exit 0
 fi
 
@@ -215,6 +218,25 @@ make_marker_body "$approval_snapshot" approve clean "$approval_body" \
 "$GUARD" submit-approve owner repo 1 "$approval_snapshot" "$approval_body" \
   > "$TEMP_ROOT/approval.submit"
 grep -F 'event=APPROVE' "$STUB_POST_LOG" >/dev/null || fail 'fresh clean approval was not submitted'
+
+# An approval asserts every comment was judged. One the viewer never marked seen
+# (here the user's own open concern) blocks it even with green CI and threads.
+export STUB_MODE=unseen
+printf '0\n' > "$STUB_COUNT_FILE"
+: > "$STUB_POST_LOG"
+unseen_snapshot="$TEMP_ROOT/unseen.snapshot"
+unseen_body="$TEMP_ROOT/unseen.body"
+"$GUARD" snapshot owner repo 1 > "$unseen_snapshot"
+make_marker_body "$unseen_snapshot" approve clean "$unseen_body" \
+  'LGTM — 已检查当前 HEAD 的关键行为与失败边界。'
+set +e
+"$GUARD" submit-approve owner repo 1 "$unseen_snapshot" "$unseen_body" \
+  > "$TEMP_ROOT/unseen.out" 2> "$TEMP_ROOT/unseen.err"
+unseen_status=$?
+set -e
+assert_eq "$unseen_status" 64
+grep -F 'unseen: IC_open' "$TEMP_ROOT/unseen.err" >/dev/null || fail 'unseen comment did not block approval'
+[ ! -s "$STUB_POST_LOG" ] || fail 'approval was submitted past an unseen comment'
 
 # A handoff written with the previous token schema remains resumable while its
 # HEAD/base and legacy external state still match the captured snapshot.

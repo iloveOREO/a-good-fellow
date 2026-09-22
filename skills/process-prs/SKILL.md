@@ -391,6 +391,14 @@ gh api graphql -f query='mutation($id:ID!){
 A failed `verify-external` forbids the reaction in the same command or later; handle
 the exit code first (exit 3 restarts this PR as above).
 
+A `verdict=clean` outcome (every approval, and a clean comment) is refused while any
+issue or inline comment remains unseen, the viewer's own marker posts excepted. Reading
+a preview or only the newest comments is not judging: open each unseen comment in full,
+record its root cause and your conclusion, then react. A comment by the viewer's login
+without a marker was written by the user personally and states their position; it is
+judged like any concern and is never overridden or downgraded to "track later" unless
+the author resolved it in code or the user withdrew it.
+
 This applies to §2A feedback and §2B ledger comments; review summaries are not
 reactable. A 👀 is a visible read signal and prevents duplicate reactions, but alone
 never proves a review outcome or permits skipping code—only matching marker/handoff or
@@ -448,6 +456,10 @@ changes; otherwise name the checked risk areas in 1–3 concrete sentences.
   suppresses nothing; route the clean predicates immediately.
 - No concern and effective CI/threads clean: `verdict=clean`; only here does a direct
   request use `submit-approve`, otherwise use `submit-comment`.
+- The viewer's latest approval sits on an older HEAD (or predates a new substantive
+  concern) and this outcome is not clean: the `concern`/`waiting` body must say the
+  earlier approval no longer reflects the current HEAD and name what re-approval
+  needs. The skill cannot dismiss an approval, so this visible note is the retraction.
 
 All writes go through `pr-review-guard.sh`; never call `gh pr comment/review` directly,
 request changes, close, or merge. Exit 3 means confirmed stale state: clear the
