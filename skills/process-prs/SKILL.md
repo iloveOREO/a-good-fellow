@@ -229,9 +229,11 @@ full CI rerun each time while the red check stays untouched.
 Instead keep the worktree and carry the classification made **before** the merge — the
 concrete CI failure with its run/job ids, the unresolved threads, the feedback that is
 not ours — and do that work on the merged tree, as commits on top of the merge commit.
-Because the merge is never pushed on its own, GitHub has no check results for the
-merged tree at all: keep the pre-merge classification and re-read the captured failing
-job against the merged tree, rather than waiting for a rollup that cannot exist yet.
+Because the merge is never pushed on its own, no rollup exists for *that commit* —
+but GitHub's exact-parent test merge is still a real CI signal for an equivalent tree
+when the merge was clean, and `CI_CLEAN` above already reads it. Keep the pre-merge
+classification and re-read the captured failing job against the merged tree; do not
+wait for a rollup of the local merge commit, which cannot exist yet.
 Then push once:
 
 ```bash
@@ -241,11 +243,26 @@ git -C <worktree> push origin "HEAD:refs/heads/<headRefName>"
 One push carries the merge commit and the fix commits, so the branch gets one CI run
 instead of two and the merge never lands as an unexplained commit by itself. When the
 carried work needs no code change after all — the merge resolved it, or the only work
-was the conflict — push the merge alone and say so in the reply. A rejected push, or a
+was the conflict — push the merge alone and say so in the reply to that work. A rejected push, or a
 PR head that moved after the fetch, is the same abandonment as conventions §3: publish
 nothing, do not replay the old merge, and restart later without advancing. If time runs
 out before the work is finished, push nothing and break without a receipt or an advance;
 the unpushed merge is discarded with the worktree.
+
+**The `strict=true` entry carries no work, so it needs its own ending.** When the gate
+ran *only* because the branch was behind a base with `required_status_checks.strict=true`
+— no concrete CI failure, no unresolved thread, no feedback that is not ours, no
+conflict — there is no reply for the push to ride along with, and none of `fixed`,
+`commented`, or `ci-waiting` describes it. Push the merge alone, then post one marked
+issue comment naming the merge commit SHA, the base tip it merged, and `strict=true` as
+the reason, so the commit never appears on the user's branch unexplained; this is
+conventions §3's after-the-fact visibility, which is the whole substitute for asking
+first. Finalize `synced` after that confirmed comment — §1's table treats it as
+completed own-PR handling — and skip the table below, whose `ready` row would otherwise
+call a branch GitHub still refuses to merge ready. Discarding the merge instead is the
+other broken reading: every tick would re-merge and re-discard while the PR stays
+unmergeable forever. If the push is rejected or the comment cannot be confirmed,
+publish nothing further and leave the row unadvanced for the next tick.
 
 The table applies only after that gate has passed:
 
@@ -305,8 +322,8 @@ current snapshot. After a push or any conversation mutation, capture a new compl
 snapshot, require the expected HEAD, and rebuild the ledger before the next mutation.
 On push rejection or freshness mismatch, publish nothing, clean up, and restart this
 PR later without advancing. Finalize `fixed` after a pushed fix plus reconciled
-replies/resolutions, `commented` for handled feedback without a push, and `ci-waiting`
-after a rerun. Remove the worktree/private ref after a completed item.
+replies/resolutions, `commented` for handled feedback without a push, `synced` after a
+baseline-only push plus its confirmed marked comment, and `ci-waiting` after a rerun. Remove the worktree/private ref after a completed item.
 
 ## 2B. PR authored by someone else — review
 
