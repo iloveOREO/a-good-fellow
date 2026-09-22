@@ -108,8 +108,13 @@ if [ "${1:-}" = api ] && [ "${2:-}" = graphql ]; then
   ci=false
   if [ "${STUB_MODE:-waiting}" = approval ] && [ "$count" -ge 2 ]; then ci=true; fi
   stable='{"pullRequest":{"stable":"same"}}'
+  index='pr|PR_1|author|2026-08-19T00:00:00Z|-'
   if [ "${STUB_MODE:-waiting}" = drift ]; then
     stable="{\"pullRequest\":{\"stable\":$count}}"
+  fi
+  if [ "${STUB_MODE:-waiting}" = conversation ] && [ "$count" -ge 2 ]; then
+    stable='{"pullRequest":{"stable":"commented"}}'
+    index="comment|IC_late|human|2026-08-19T00:00:07Z|2026-08-19T00:00:07Z $index"
   fi
   printf '%s\n' \
     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
@@ -124,7 +129,8 @@ if [ "${1:-}" = api ] && [ "${2:-}" = graphql ]; then
     "{\"pullRequest\":{\"ciVersion\":$count}}" \
     "{\"pullRequest\":{\"legacyMergeVersion\":$count}}" \
     false \
-    -
+    - \
+    "$index"
   exit 0
 fi
 
@@ -239,6 +245,30 @@ printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
   "$migrate_token" reviewed "$legacy_size" "$legacy_payload" > "$migrate_file"
 migrate_phase=$(GOOD_FELLOW_STATE_DIR="$migrate_state" "$HANDOFF" match owner repo 1 "$legacy_snapshot")
 assert_eq "$migrate_phase" reviewed-migrate
+
+# A conversation item posted between snapshot and submission must be named in
+# the exit-3 diagnostics, so a restart cannot attribute the token change to a HEAD
+# move alone and skip the new comment. HEAD is unchanged here on purpose.
+export STUB_MODE=conversation
+printf '0\n' > "$STUB_COUNT_FILE"
+: > "$STUB_POST_LOG"
+conversation_snapshot="$TEMP_ROOT/conversation.snapshot"
+conversation_body="$TEMP_ROOT/conversation.body"
+"$GUARD" snapshot owner repo 1 > "$conversation_snapshot"
+make_marker_body "$conversation_snapshot" comment waiting "$conversation_body" \
+  '当前 HEAD 审查完成；CI 仍在运行，因此暂不批准。'
+set +e
+"$GUARD" submit-comment owner repo 1 "$conversation_snapshot" "$conversation_body" \
+  > "$TEMP_ROOT/conversation.out" 2> "$TEMP_ROOT/conversation.err"
+conversation_status=$?
+set -e
+assert_eq "$conversation_status" 3
+grep -Fx 'pr-review-guard: changed: new comment IC_late by human at 2026-08-19T00:00:07Z' \
+  "$TEMP_ROOT/conversation.err" >/dev/null || fail 'late comment was not named on exit 3'
+! grep -F 'changed: HEAD' "$TEMP_ROOT/conversation.err" >/dev/null ||
+  fail 'unchanged HEAD was reported as changed'
+[ ! -s "$STUB_POST_LOG" ] || fail 'stale-conversation review was submitted'
+export STUB_MODE=waiting
 
 # The snapshot lines 9/11 are digests: the only PR JSON in the file is the
 # complete ledger on line 10.
@@ -492,7 +522,7 @@ git clone -q "$source_remote" "$source_checkout"
 original_source_head=$(git -C "$source_checkout" rev-parse HEAD)
 git -C "$source_seed" -c user.name=test -c user.email=test@example.com \
   commit --allow-empty -m second >/dev/null
-git -C "$source_seed" push -q
+git -C "$source_seed" push -q origin HEAD:main
 expected_source_head=$(git -C "$source_seed" rev-parse HEAD)
 printf '0\n' > "$maintenance_state/maintenance-last-check"
 printf 'new remote preference\n' > "$maintenance_state/instruction.md"

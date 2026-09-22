@@ -322,8 +322,15 @@ restart fresh. Never treat CI or mergeability-only drift as a new event.
   `submit-approve` for a direct user request and `submit-comment` otherwise.
 
 A confirmed state mismatch or guard exit 3 clears the handoff and restarts this PR
-from a fresh snapshot when time permits. Inability to verify preserves the handoff and
-breaks without advancing, exactly as the status-code case above requires.
+from a fresh snapshot when time permits. Exit 3 prints one `changed:` line per HEAD,
+base, or conversation item that differs; read them all before deciding what the
+restart covers. A HEAD move never explains the other lines: every listed comment,
+review, or thread must be read from the fresh snapshot's complete ledger and judged
+like any ledger entry, and the suppression ledger is rebuilt from that snapshot. Code
+already proved at an ancestor HEAD may be reused only for the diff it covered—later
+conversation is never covered by it, even when it arrived in the same run.
+Inability to verify preserves the handoff and breaks without advancing, exactly as
+the status-code case above requires.
 
 ### Step 3 — Review fresh or resume
 
@@ -357,6 +364,12 @@ A clean verdict requires all of:
 
 Look only for critical correctness, data, security, compatibility, or concurrency
 issues—not summaries or nits. A publishable finding must be absent from the ledger.
+Two checks are part of that scope, not nits. When the PR fixes a defect pattern at
+some call sites, search the repository for the same pattern and state whether
+unfixed sites remain (each one proved equivalent under the analogy rule below); describing the fix as complete without that search is an
+unproved claim. When the PR adds or relies on a regression test, confirm from
+scripts and workflow files that CI actually executes it; an empty search for its
+runner in the workflows is a finding to report, not a result to drop.
 A finding that argues by analogy ("route X lacks the guard its sibling Y has") must
 first prove X and Y are functionally equivalent by reading both handlers to their
 implementations—never by path, prefix, or name similarity, which vendor/brand naming
@@ -369,11 +382,14 @@ root cause in the current ledger/payload, mark that exact comment seen when its
 snapshot field `seen=false`:
 
 ```bash
-"$GUARD" verify-external "$OWNER" "$REPO" "$NUMBER" "$PR_STATE"
+"$GUARD" verify-external "$OWNER" "$REPO" "$NUMBER" "$PR_STATE" &&
 gh api graphql -f query='mutation($id:ID!){
   addReaction(input:{subjectId:$id,content:EYES}){reaction{content}}
 }' -f id="$COMMENT_NODE_ID"
 ```
+
+A failed `verify-external` forbids the reaction in the same command or later; handle
+the exit code first (exit 3 restarts this PR as above).
 
 This applies to §2A feedback and §2B ledger comments; review summaries are not
 reactable. A 👀 is a visible read signal and prevents duplicate reactions, but alone
