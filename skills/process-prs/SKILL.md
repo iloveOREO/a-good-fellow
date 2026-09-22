@@ -201,9 +201,17 @@ rebase and force-push stay forbidden; merging is what keeps the later push a
 fast-forward.
 
 ```bash
+BASE_SHA=$(git -C <worktree> rev-parse "refs/good-fellow/base/$BASE")
 GIT_EDITOR=true git -C <worktree> -c user.name="$GF_NAME" -c user.email="$GF_MAIL" \
-  merge --no-edit "refs/good-fellow/base/$BASE"
+  merge -m "Merge base $BASE into the PR head
+
+Good-Fellow-Baseline-Merge: $BASE_SHA" "refs/good-fellow/base/$BASE"
 ```
+
+The `Good-Fellow-Baseline-Merge:` trailer is not decoration: it is the only durable
+evidence that *this sweep* produced the merge, and the recovery gate below keys on it.
+Write it on every baseline merge, including a conflicted one — finishing with
+`git commit --no-edit` reuses the same `MERGE_MSG` and keeps the trailer.
 
 The merge commit is only the baseline update. Do not fold a CI or feedback fix into
 it. When the merge conflicts, resolve those conflicts before any other work. Keep both
@@ -272,11 +280,30 @@ on the user's branch, and it is already the base tip's descendant, so next tick
 the paragraph that owes the explanation can never fire. Leaving the row unadvanced does
 not help — the push destroyed its own trigger. Conventions §5 requires a halfway failure
 to be safe to re-run, so the recovery must key on the unexplained merge itself, not on
-being behind: before anything else in §2A, when HEAD is a merge whose first parent is
-the previous head and whose second parent is a base tip, and no authenticated-user
-marked comment names that merge SHA, post that comment now and finalize `synced`. Record
-the pending comment and its merge SHA in the handoff when the post fails, so the next
-tick retries it ahead of other work.
+being behind.
+
+It must also key on a fact only *our own* push can produce. The shape of the commit is
+not such a fact: "first parent is the previous head" holds for every merge commit on a
+branch, "second parent is a base tip" holds for any `git merge origin/<base>` the author
+ran by hand, and "no marked comment names it" is trivially true of a merge we never
+pushed. A shape-based trigger therefore fires on an own PR whose author merged the base
+in themselves, and publishes a marked comment claiming a push this sweep never
+performed — exactly the write-before-the-action that conventions §5 forbids. Key on the
+trailer instead: before anything else in §2A, when HEAD is a merge whose message carries
+a `Good-Fellow-Baseline-Merge:` trailer **and** whose committer email equals the
+`$GF_MAIL` derived from `gh api user`, and no authenticated-user marked comment names
+that merge SHA, post that comment now and finalize `synced`. A merge without the trailer
+is the author's own work: claim nothing about it and fall through to the table.
+
+The recovery comment states only what the trailer still proves — this sweep pushed that
+merge SHA to bring the branch onto the named base tip. It must not reassert the original
+trigger: the classification that produced the merge died with the lost handoff, so
+naming `strict=true` there would be another unproven claim.
+
+That trigger is self-healing, so a failed post needs no handoff row — the trailer stays
+on the branch and the next tick re-enters the same gate. Do not try to record it in a
+handoff: `pr-handoff.sh` accepts only the §2B `reviewing`/`reviewed` phases, and
+`reviewing` would additionally pin the queue to this PR and break the sweep.
 
 The table applies only after that gate has passed:
 
