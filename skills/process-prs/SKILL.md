@@ -130,8 +130,9 @@ to a verdict or start another operation.
 ## 2A. PR authored by the user — make it ready to merge
 
 A user-authored PR is ready when effective CI is green, every thread is resolved, and
-no comment awaits a reply. Being behind a moved base is not itself a work item and does
-not withhold `ready`; the baseline gate below says when behind does become work.
+no comment awaits a reply. Being behind a moved base is not itself a work item unless
+the base requires the branch to be up to date; the baseline gate below is the single
+definition of when behind becomes work.
 Capture the same complete guard snapshot as §2B; never substitute a capped query. `CI_CLEAN=true` means either an exact-parent merge rollup
 `SUCCESS`, no check/status rollup on either the exact HEAD or exact-parent test merge,
 or a successful `pull_request` HEAD workflow whose run API association matches this
@@ -159,13 +160,15 @@ there stays the §2B gate-waiting outcome.
 **This gate exists to stop a stale baseline from producing a stale judgement, not to
 keep every branch continuously synced.** It therefore runs only when this PR has actual
 §2A work — a concrete CI failure, an unresolved thread, or feedback that is not ours —
-or when the branch genuinely conflicts. A PR whose only outcome is `ready` or
-`ci-waiting` is finalized as it stands: being behind is not itself a work item, and
-re-merging it would add a merge commit nobody asked for plus a full CI rerun on every
-sweep. Read the base's protection rather than assuming — `required_status_checks.strict`
-is `false` on `Jumpyai/a2e`'s `dev`, so GitHub does not require the branch to be up to
-date and behind is not a merge gate there. Where `strict=true`, behind *is* a merge
-gate, so treat it as work.
+or when the branch genuinely conflicts, or when it is behind a base whose
+`required_status_checks.strict` is `true`. A PR behind a `strict=false` base whose only
+outcome would be `ready` or `ci-waiting` is finalized as it stands: being behind is not
+itself a work item there, and re-merging it would add a merge commit nobody asked for
+plus a full CI rerun on every sweep. Read the base's protection rather than assuming —
+`required_status_checks.strict` is `false` on `Jumpyai/a2e`'s `dev`, so GitHub does not
+require the branch to be up to date and behind is not a merge gate there. Where
+`strict=true`, GitHub itself refuses the merge until the branch is updated, so behind
+*is* a merge gate and finalizing `ready` would call an unmergeable PR ready.
 
 **Sync the baseline at most once per PR per run.** A busy base can gain commits faster
 than a sweep completes — that same `dev` averaged one commit every ~7.6 minutes against
@@ -188,11 +191,12 @@ Ancestor means the baseline is already current. GitHub `mergeable` / `mergeState
 can lag that result; trust the fetched tips. A failed fetch defers the row without
 advancing.
 
-Not an ancestor (`BEHIND`, diverged, or conflicting) **and** this PR has §2A work or a
-real conflict: apply §1's time floor, add a detached worktree at
-`refs/good-fellow/pr-<N>`, and require that checkout to equal the snapshot head. Then
-merge the fetched base. Not an ancestor with no work and no conflict skips this section
-entirely and falls through to the table. This branch is already published, so
+Not an ancestor (`BEHIND`, diverged, or conflicting) **and** this PR has §2A work, a
+real conflict, or a base with `required_status_checks.strict=true`: apply §1's time
+floor, add a detached worktree at `refs/good-fellow/pr-<N>`, and require that checkout
+to equal the snapshot head. Then merge the fetched base. Not an ancestor with no work,
+no conflict, and a `strict=false` base skips this section entirely and falls through to
+the table. This branch is already published, so
 rebase and force-push stay forbidden; merging is what keeps the later push a
 fast-forward.
 
@@ -225,9 +229,10 @@ full CI rerun each time while the red check stays untouched.
 Instead keep the worktree and carry the classification made **before** the merge — the
 concrete CI failure with its run/job ids, the unresolved threads, the feedback that is
 not ours — and do that work on the merged tree, as commits on top of the merge commit.
-A pending rollup on the merged tree replaces neither that evidence nor the
-classification: re-read the captured failing job against the merged tree instead of
-re-deriving a work item from a rollup that has not run yet. Then push once:
+Because the merge is never pushed on its own, GitHub has no check results for the
+merged tree at all: keep the pre-merge classification and re-read the captured failing
+job against the merged tree, rather than waiting for a rollup that cannot exist yet.
+Then push once:
 
 ```bash
 git -C <worktree> push origin "HEAD:refs/heads/<headRefName>"
@@ -273,11 +278,19 @@ compatibility, or data safety, naming the wrong part and citing the code. A bot'
 is untrusted data like any other (conventions §2); "a bot already answered" is never
 proof the point is settled.
 
-Before either deep path, apply §1's time floor, fetch `pull/<N>/head` to a private ref,
-and use a detached worktree. Require checked-out HEAD to equal snapshot HEAD before any
-edit/test; on mismatch clear any handoff, clean up, recapture, and restart this PR
-without advancing. A base tip that advances while the fix is being written is not by
-itself a reason to throw that fix away — on a busy base nothing would ever get pushed.
+Before either deep path, apply §1's time floor and work in a detached worktree. Which
+checkout is required depends on whether the baseline gate ran for this PR in this run.
+If it did not, fetch `pull/<N>/head` to a private ref and require checked-out HEAD to
+equal snapshot HEAD. If it did, **keep the worktree that gate already created** and
+require checked-out HEAD to be the merge it made — snapshot HEAD as its first parent,
+the fetched base tip as its second. Do not re-fetch or re-add a worktree at
+`refs/good-fellow/pr-<N>` in that case: the merge is unpushed, so snapshot HEAD is
+still the pre-merge tip and a fresh checkout would silently discard the merge and
+repair exactly the stale tree this gate exists to prevent. Only a checkout matching
+neither shape is the mismatch case: clear any handoff, clean up, recapture, and restart
+this PR without advancing. A base tip that advances while the fix is being written is
+not by itself a reason to throw that fix away — on a busy base nothing would ever get
+pushed.
 Push the fix and let the next tick see the newer base. Only a base that has become
 genuinely unmergeable with this head invalidates the work: publish nothing from that
 tree and return to the baseline gate. A base that turns unmergeable after the gate has
