@@ -261,8 +261,22 @@ first. Finalize `synced` after that confirmed comment — §1's table treats it 
 completed own-PR handling — and skip the table below, whose `ready` row would otherwise
 call a branch GitHub still refuses to merge ready. Discarding the merge instead is the
 other broken reading: every tick would re-merge and re-discard while the PR stays
-unmergeable forever. If the push is rejected or the comment cannot be confirmed,
-publish nothing further and leave the row unadvanced for the next tick.
+unmergeable forever.
+
+The two halfway failures here are not symmetric, so they get different handling. **A
+rejected push** left nothing on the branch: the PR is still behind, the gate still
+triggers next tick, so publish nothing further and leave the row unadvanced. **A push
+that succeeded while its comment did not** is the dangerous one: the merge is already
+on the user's branch, and it is already the base tip's descendant, so next tick
+`merge-base --is-ancestor` reports the baseline current, the gate never runs again, and
+the paragraph that owes the explanation can never fire. Leaving the row unadvanced does
+not help — the push destroyed its own trigger. Conventions §5 requires a halfway failure
+to be safe to re-run, so the recovery must key on the unexplained merge itself, not on
+being behind: before anything else in §2A, when HEAD is a merge whose first parent is
+the previous head and whose second parent is a base tip, and no authenticated-user
+marked comment names that merge SHA, post that comment now and finalize `synced`. Record
+the pending comment and its merge SHA in the handoff when the post fails, so the next
+tick retries it ahead of other work.
 
 The table applies only after that gate has passed:
 
