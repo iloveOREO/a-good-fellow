@@ -129,8 +129,9 @@ to a verdict or start another operation.
 
 ## 2A. PR authored by the user — make it ready to merge
 
-A user-authored PR is ready only when its head already contains the current base tip,
-effective CI is green, every thread is resolved, and no comment awaits a reply.
+A user-authored PR is ready when effective CI is green, every thread is resolved, and
+no comment awaits a reply. Being behind a moved base is not itself a work item and does
+not withhold `ready`; the baseline gate below says when behind does become work.
 Capture the same complete guard snapshot as §2B; never substitute a capped query. `CI_CLEAN=true` means either an exact-parent merge rollup
 `SUCCESS`, no check/status rollup on either the exact HEAD or exact-parent test merge,
 or a successful `pull_request` HEAD workflow whose run API association matches this
@@ -148,10 +149,11 @@ THREADS_CLEAN=$("$GUARD" threads-clean "$PR_STATE")
 
 ### Baseline before fixes
 
-On the user's own PR, a baseline that is not current is handled before review, CI, or
-other feedback: merge the base tip in, push it, and only then re-examine the new head.
-Do not repair, reply, or conclude on the pre-update tree, and do not record
-`ci-waiting` for a conflict. Someone else's PR never receives this push; a conflict
+On the user's own PR, a baseline that is not current is merged in before review, CI, or
+other feedback work, so that work lands on the updated tree. The merge is committed
+locally and is **not** pushed by itself; it leaves with the fix in the single push at
+the end of §2A. Do not repair, reply, or conclude on the pre-update tree, and do not
+record `ci-waiting` for a conflict. Someone else's PR never receives this push; a conflict
 there stays the §2B gate-waiting outcome.
 
 **This gate exists to stop a stale baseline from producing a stale judgement, not to
@@ -167,8 +169,8 @@ gate, so treat it as work.
 
 **Sync the baseline at most once per PR per run.** A busy base can gain commits faster
 than a sweep completes — that same `dev` averaged one commit every ~7.6 minutes against
-a ~25-minute run — so re-entering this gate after its own push would merge, push, and
-restart forever while the CI or feedback that motivated the sync never got handled.
+a ~25-minute run — so re-entering this gate after it has already merged would merge and
+re-merge forever while the CI or feedback that motivated the sync never got handled.
 Once the gate has run for a PR in this run, the rest of §2A proceeds on that head even
 if the base moves again; the next tick picks up the newer base.
 
@@ -206,27 +208,39 @@ and do not drop either side to force a clean tree. A generated file whose reposi
 documents an offline regeneration command is mechanical: take the base version,
 regenerate, and keep the output only when it matches the generator. Finish a conflicted
 merge with the same per-command identity and no editor (`git commit --no-edit` or
-`-F`), then plain-push:
-
-```bash
-git -C <worktree> push origin "HEAD:refs/heads/<headRefName>"
-```
+`-F`), then keep going with the §2A work below — the push happens once, at the end.
 
 A conflict that cannot be combined without inventing behavior neither side contains:
 `merge --abort`, push nothing, and post no fix claim. Name the paths in the run
 report. Do not record `ready`, `fixed`, or `ci-waiting`. Leave the row unadvanced so
 the next tick retries the resolution before other PRs.
 
-After a successful baseline push, the old snapshot is stale. Clear any handoff, remove
-the worktree and both private refs, recapture, and restart §2A on the new head. Do not
-reuse a verdict, a planned patch, or a reply written against the old tree. That restart
-re-reads CI and feedback against the new baseline, but it does **not** re-enter this
-gate: the once-per-run rule above has already been spent, so a base that advanced again
-in the meantime is left to the next tick instead of starving the very work this sync
-was performed for. If no time remains to restart, break without a receipt or an advance.
-A rejected push, or a PR head that moved after the fetch, is the same abandonment as
-conventions §3: publish nothing, do not replay the old merge, and restart later without
-advancing.
+**Do not push the merge on its own and restart §2A here.** That push puts the head's
+checks back into `queued`, so the recaptured snapshot shows `CI_CLEAN=false` with no
+concrete failure and finalizes `ci-waiting` — the CI failure that triggered the sync is
+never read, and the next tick finds the base moved again and repeats the merge. On a
+base busier than the sweep cadence that repeats forever, adding a merge commit and a
+full CI rerun each time while the red check stays untouched.
+
+Instead keep the worktree and carry the classification made **before** the merge — the
+concrete CI failure with its run/job ids, the unresolved threads, the feedback that is
+not ours — and do that work on the merged tree, as commits on top of the merge commit.
+A pending rollup on the merged tree replaces neither that evidence nor the
+classification: re-read the captured failing job against the merged tree instead of
+re-deriving a work item from a rollup that has not run yet. Then push once:
+
+```bash
+git -C <worktree> push origin "HEAD:refs/heads/<headRefName>"
+```
+
+One push carries the merge commit and the fix commits, so the branch gets one CI run
+instead of two and the merge never lands as an unexplained commit by itself. When the
+carried work needs no code change after all — the merge resolved it, or the only work
+was the conflict — push the merge alone and say so in the reply. A rejected push, or a
+PR head that moved after the fetch, is the same abandonment as conventions §3: publish
+nothing, do not replay the old merge, and restart later without advancing. If time runs
+out before the work is finished, push nothing and break without a receipt or an advance;
+the unpushed merge is discarded with the worktree.
 
 The table applies only after that gate has passed:
 
@@ -266,9 +280,12 @@ without advancing. A base tip that advances while the fix is being written is no
 itself a reason to throw that fix away — on a busy base nothing would ever get pushed.
 Push the fix and let the next tick see the newer base. Only a base that has become
 genuinely unmergeable with this head invalidates the work: publish nothing from that
-tree and return to the baseline gate. Handle all CI and feedback together, test,
-commit, and plain-push once—never force, rebase, or retry a stale decision. Push only
-what the fix itself changed, from the exact snapshot HEAD.
+tree and return to the baseline gate. A base that turns unmergeable after the gate has
+already run does **not** regain the once-per-run allowance: leave the row unadvanced
+with nothing pushed and let the next tick sync it. Handle all CI and feedback together,
+test, commit, and plain-push once—never force, rebase, or retry a stale decision. Push
+only what the fix itself changed, on top of the exact snapshot HEAD, or on top of the
+baseline merge made from it when that gate ran.
 
 Push before claiming a fix. Before every comment/reply/thread resolution, verify the
 current snapshot. After a push or any conversation mutation, capture a new complete
