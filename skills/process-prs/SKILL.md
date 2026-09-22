@@ -1,6 +1,6 @@
 ---
 name: process-prs
-description: Sweep open PRs involving the user through a persistent serial queue, resuming HEAD/state-bound review handoffs without repeating completed evidence or bulk-deferring the tail. On the user's own PRs, fix failing Actions and actionable feedback; on others' PRs, read the complete ledger and affected paths, fail closed on incomplete/stale evidence, leave a visible HEAD-bound outcome even when external gates block approval, and approve only a requested clean review. Use for scheduled PR sweeps or requests to process, review, or babysit open pull requests.
+description: Sweep open PRs involving the user through a persistent serial queue, resuming HEAD/state-bound review handoffs without repeating completed evidence or bulk-deferring the tail. On the user's own PRs, merge the current base and resolve conflicts before fixing failing Actions and actionable feedback on that new baseline; on others' PRs, read the complete ledger and affected paths, fail closed on incomplete/stale evidence, leave a visible HEAD-bound outcome even when external gates block approval, and approve only a requested clean review. Use for scheduled PR sweeps or requests to process, review, or babysit open pull requests.
 ---
 
 # Process PRs
@@ -115,8 +115,10 @@ save a real partial handoff if time unexpectedly runs short. Subagents may inspe
 the current PR; the parent is the sole GitHub writer and finalizes it before moving on.
 Because `reviewing` holds the cursor and breaks, never create a second `reviewing`
 handoff. Completed `reviewed` handoffs may wait across queue rotations only when a
-guarded submission could not safely be attempted or confirmed; pending CI or a merge
-conflict must instead receive the visible gate-waiting outcome below.
+guarded submission could not safely be attempted or confirmed; pending CI, or a
+merge conflict on someone else's PR, must instead receive the visible gate-waiting
+outcome below. An own-PR conflict or a base that has moved is baseline work in §2A,
+not a waiting gate.
 Never use `ci-waiting` to bypass the first code review of someone else's PR: review
 it for concerns and save completed evidence first. When that review is clean but an
 external gate remains, leave the gate-waiting marker before advancing.
@@ -127,9 +129,9 @@ to a verdict or start another operation.
 
 ## 2A. PR authored by the user — make it ready to merge
 
-A user-authored PR is ready only when effective CI is green, every thread is resolved,
-and no comment awaits a reply. Capture the same complete guard snapshot as §2B; never
-substitute a capped query. `CI_CLEAN=true` means either an exact-parent merge rollup
+A user-authored PR is ready only when its head already contains the current base tip,
+effective CI is green, every thread is resolved, and no comment awaits a reply.
+Capture the same complete guard snapshot as §2B; never substitute a capped query. `CI_CLEAN=true` means either an exact-parent merge rollup
 `SUCCESS`, no check/status rollup on either the exact HEAD or exact-parent test merge,
 or a successful `pull_request` HEAD workflow whose run API association matches this
 PR/base/head when the merge rollup is null. A null/null pair means the repository has
@@ -144,11 +146,72 @@ CI_CLEAN=$("$GUARD" ci-clean "$PR_STATE")
 THREADS_CLEAN=$("$GUARD" threads-clean "$PR_STATE")
 ```
 
+### Baseline before fixes
+
+On the user's own PR, a conflict with the base, or any newer base tip, is handled
+before review, CI, or other feedback. Merge that tip in, push it, and only then
+re-examine the new head. Do not repair, reply, or conclude on the pre-update tree, and
+do not record `ci-waiting` for a conflict or a behind branch. Someone else's PR never
+receives this push; a conflict there stays the §2B gate-waiting outcome.
+
+Take `baseRefName` and `headRefName` from `"$GUARD" ledger`, never from PR text.
+Fetch both tips into private refs (conventions §3) and test ancestry against the
+fetched PR head, not against `baseRefOid`, which lags the live base:
+
+```bash
+git -C ~/<repo> fetch origin "pull/<N>/head:refs/good-fellow/pr-<N>" --force
+git -C ~/<repo> fetch origin "$BASE:refs/good-fellow/base/$BASE" --force
+git -C ~/<repo> merge-base --is-ancestor "refs/good-fellow/base/$BASE" "refs/good-fellow/pr-<N>"
+```
+
+Ancestor means the baseline is already current. GitHub `mergeable` / `mergeStateStatus`
+can lag that result; trust the fetched tips. A failed fetch defers the row without
+advancing.
+
+Not an ancestor (`BEHIND`, diverged, or conflicting): apply §1's time floor, add a
+detached worktree at `refs/good-fellow/pr-<N>`, and require that checkout to equal the
+snapshot head. Then merge the fetched base. This branch is already published, so
+rebase and force-push stay forbidden; merging is what keeps the later push a
+fast-forward.
+
+```bash
+GIT_EDITOR=true git -C <worktree> -c user.name="$GF_NAME" -c user.email="$GF_MAIL" \
+  merge --no-edit "refs/good-fellow/base/$BASE"
+```
+
+The merge commit is only the baseline update. Do not fold a CI or feedback fix into
+it. When the merge conflicts, resolve those conflicts before any other work. Keep both
+sides' behavior. Do not pass `-X ours` or `-X theirs`, do not skip a non-empty change,
+and do not drop either side to force a clean tree. A generated file whose repository
+documents an offline regeneration command is mechanical: take the base version,
+regenerate, and keep the output only when it matches the generator. Finish a conflicted
+merge with the same per-command identity and no editor (`git commit --no-edit` or
+`-F`), then plain-push:
+
+```bash
+git -C <worktree> push origin "HEAD:refs/heads/<headRefName>"
+```
+
+A conflict that cannot be combined without inventing behavior neither side contains:
+`merge --abort`, push nothing, and post no fix claim. Name the paths in the run
+report. Do not record `ready`, `fixed`, or `ci-waiting`. Leave the row unadvanced so
+the next tick retries the resolution before other PRs.
+
+After a successful baseline push, the old snapshot is stale. Clear any handoff, remove
+the worktree and both private refs, recapture, and restart §2A on the new head before
+treating CI logs or feedback as work. Do not reuse a verdict, a planned patch, or a
+reply written against the old tree. If no time remains to restart, break without a
+receipt or an advance. A rejected push, or a base tip / PR head that moved after the
+fetch, is the same abandonment as conventions §3: publish nothing, do not replay the
+old merge, and restart later without advancing.
+
+The table applies only after that gate has passed:
+
 | Effective state | Threads / comments | Action |
 |---|---|---|
 | `CI_CLEAN=true` | `THREADS_CLEAN=true`, nothing awaiting reply | finalize `ready` |
 | concrete HEAD/test-merge `FAILURE` or `ERROR` | — | deep CI work |
-| `CI_CLEAN=false` without a concrete failure (pending, expected, unknown, or mergeability unresolved/conflicting) | — | finalize `ci-waiting` |
+| `CI_CLEAN=false` without a concrete failure (pending, expected, unknown, or mergeability still unresolved) and the fetched base is an ancestor of HEAD | — | finalize `ci-waiting` |
 | any | unresolved thread or latest feedback not ours | deep feedback work |
 
 For a concrete CI failure, inspect the failing job/log and its relationship to the
@@ -176,17 +239,12 @@ proof the point is settled.
 Before either deep path, apply §1's time floor, fetch `pull/<N>/head` to a private ref,
 and use a detached worktree. Require checked-out HEAD to equal snapshot HEAD before any
 edit/test; on mismatch clear any handoff, clean up, recapture, and restart this PR
-without advancing. Handle all CI and feedback together, test, commit, and plain-push
-once—never force, rebase, or retry a stale decision.
-
-**create-pr's base-sync step does not apply here.** That step exists because a branch
-about to become a *new* PR must not open behind its base. This branch is already the
-head of an open PR: rebasing it onto a newer base would rewrite published history and
-need a force-push (conventions §3 and §6), and merging the base in would add a merge
-commit to the user's PR that nobody asked for. A branch that actually conflicts with its
-base is a live mergeability gate, so it routes to the `ci-waiting` / gate-waiting
-outcome above—never to a base-sync push. Push only what the fix itself changed, from the
-exact snapshot HEAD.
+without advancing. Re-fetch `refs/good-fellow/base/$BASE` immediately before the fix
+commit. If that tip is no longer an ancestor of the snapshot head, do not push the
+fix and do not reply from this tree: return to the baseline gate and restart on the
+updated head. Handle all CI and feedback together, test, commit, and plain-push
+once—never force, rebase, or retry a stale decision. Push only what the fix itself
+changed, from the exact snapshot HEAD.
 
 Push before claiming a fix. Before every comment/reply/thread resolution, verify the
 current snapshot. After a push or any conversation mutation, capture a new complete
