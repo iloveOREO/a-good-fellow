@@ -125,8 +125,11 @@ git -C <worktree> push origin HEAD:refs/heads/<headRefName>
   action visible afterwards is the substitute for asking permission first.
 
 Branch naming: `good-fellow/issue-<n>` for issue fixes, `good-fellow/<short-slug>`
-otherwise. Never commit to a branch you did not create, except pushing fixes to the
-head branch of the **user's own** PR.
+otherwise. Never commit to a branch you did not create, except on the head branch of
+the **user's own** PR, where both a fix and a baseline merge of that PR's own base
+branch may be pushed. The baseline merge is allowed only as `process-prs` §2A scopes
+it — never on someone else's PR, never as a rebase or force-push, and never carrying a
+fix inside the merge commit.
 
 ## 4. Bot marker
 

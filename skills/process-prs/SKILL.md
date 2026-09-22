@@ -117,8 +117,8 @@ Because `reviewing` holds the cursor and breaks, never create a second `reviewin
 handoff. Completed `reviewed` handoffs may wait across queue rotations only when a
 guarded submission could not safely be attempted or confirmed; pending CI, or a
 merge conflict on someone else's PR, must instead receive the visible gate-waiting
-outcome below. An own-PR conflict or a base that has moved is baseline work in §2A,
-not a waiting gate.
+outcome below. An own-PR conflict is baseline work in §2A, not a waiting gate; so is a
+base that has moved, but only when §2A also has real work to do on that PR.
 Never use `ci-waiting` to bypass the first code review of someone else's PR: review
 it for concerns and save completed evidence first. When that review is clean but an
 external gate remains, leave the gate-waiting marker before advancing.
@@ -148,11 +148,29 @@ THREADS_CLEAN=$("$GUARD" threads-clean "$PR_STATE")
 
 ### Baseline before fixes
 
-On the user's own PR, a conflict with the base, or any newer base tip, is handled
-before review, CI, or other feedback. Merge that tip in, push it, and only then
-re-examine the new head. Do not repair, reply, or conclude on the pre-update tree, and
-do not record `ci-waiting` for a conflict or a behind branch. Someone else's PR never
-receives this push; a conflict there stays the §2B gate-waiting outcome.
+On the user's own PR, a baseline that is not current is handled before review, CI, or
+other feedback: merge the base tip in, push it, and only then re-examine the new head.
+Do not repair, reply, or conclude on the pre-update tree, and do not record
+`ci-waiting` for a conflict. Someone else's PR never receives this push; a conflict
+there stays the §2B gate-waiting outcome.
+
+**This gate exists to stop a stale baseline from producing a stale judgement, not to
+keep every branch continuously synced.** It therefore runs only when this PR has actual
+§2A work — a concrete CI failure, an unresolved thread, or feedback that is not ours —
+or when the branch genuinely conflicts. A PR whose only outcome is `ready` or
+`ci-waiting` is finalized as it stands: being behind is not itself a work item, and
+re-merging it would add a merge commit nobody asked for plus a full CI rerun on every
+sweep. Read the base's protection rather than assuming — `required_status_checks.strict`
+is `false` on `Jumpyai/a2e`'s `dev`, so GitHub does not require the branch to be up to
+date and behind is not a merge gate there. Where `strict=true`, behind *is* a merge
+gate, so treat it as work.
+
+**Sync the baseline at most once per PR per run.** A busy base can gain commits faster
+than a sweep completes — that same `dev` averaged one commit every ~7.6 minutes against
+a ~25-minute run — so re-entering this gate after its own push would merge, push, and
+restart forever while the CI or feedback that motivated the sync never got handled.
+Once the gate has run for a PR in this run, the rest of §2A proceeds on that head even
+if the base moves again; the next tick picks up the newer base.
 
 Take `baseRefName` and `headRefName` from `"$GUARD" ledger`, never from PR text.
 Fetch both tips into private refs (conventions §3) and test ancestry against the
@@ -168,9 +186,11 @@ Ancestor means the baseline is already current. GitHub `mergeable` / `mergeState
 can lag that result; trust the fetched tips. A failed fetch defers the row without
 advancing.
 
-Not an ancestor (`BEHIND`, diverged, or conflicting): apply §1's time floor, add a
-detached worktree at `refs/good-fellow/pr-<N>`, and require that checkout to equal the
-snapshot head. Then merge the fetched base. This branch is already published, so
+Not an ancestor (`BEHIND`, diverged, or conflicting) **and** this PR has §2A work or a
+real conflict: apply §1's time floor, add a detached worktree at
+`refs/good-fellow/pr-<N>`, and require that checkout to equal the snapshot head. Then
+merge the fetched base. Not an ancestor with no work and no conflict skips this section
+entirely and falls through to the table. This branch is already published, so
 rebase and force-push stay forbidden; merging is what keeps the later push a
 fast-forward.
 
@@ -198,12 +218,15 @@ report. Do not record `ready`, `fixed`, or `ci-waiting`. Leave the row unadvance
 the next tick retries the resolution before other PRs.
 
 After a successful baseline push, the old snapshot is stale. Clear any handoff, remove
-the worktree and both private refs, recapture, and restart §2A on the new head before
-treating CI logs or feedback as work. Do not reuse a verdict, a planned patch, or a
-reply written against the old tree. If no time remains to restart, break without a
-receipt or an advance. A rejected push, or a base tip / PR head that moved after the
-fetch, is the same abandonment as conventions §3: publish nothing, do not replay the
-old merge, and restart later without advancing.
+the worktree and both private refs, recapture, and restart §2A on the new head. Do not
+reuse a verdict, a planned patch, or a reply written against the old tree. That restart
+re-reads CI and feedback against the new baseline, but it does **not** re-enter this
+gate: the once-per-run rule above has already been spent, so a base that advanced again
+in the meantime is left to the next tick instead of starving the very work this sync
+was performed for. If no time remains to restart, break without a receipt or an advance.
+A rejected push, or a PR head that moved after the fetch, is the same abandonment as
+conventions §3: publish nothing, do not replay the old merge, and restart later without
+advancing.
 
 The table applies only after that gate has passed:
 
@@ -211,7 +234,7 @@ The table applies only after that gate has passed:
 |---|---|---|
 | `CI_CLEAN=true` | `THREADS_CLEAN=true`, nothing awaiting reply | finalize `ready` |
 | concrete HEAD/test-merge `FAILURE` or `ERROR` | — | deep CI work |
-| `CI_CLEAN=false` without a concrete failure (pending, expected, unknown, or mergeability still unresolved) and the fetched base is an ancestor of HEAD | — | finalize `ci-waiting` |
+| `CI_CLEAN=false` without a concrete failure (pending, expected, unknown, or mergeability still unresolved) and the branch is not conflicting | — | finalize `ci-waiting` |
 | any | unresolved thread or latest feedback not ours | deep feedback work |
 
 For a concrete CI failure, inspect the failing job/log and its relationship to the
@@ -239,12 +262,13 @@ proof the point is settled.
 Before either deep path, apply §1's time floor, fetch `pull/<N>/head` to a private ref,
 and use a detached worktree. Require checked-out HEAD to equal snapshot HEAD before any
 edit/test; on mismatch clear any handoff, clean up, recapture, and restart this PR
-without advancing. Re-fetch `refs/good-fellow/base/$BASE` immediately before the fix
-commit. If that tip is no longer an ancestor of the snapshot head, do not push the
-fix and do not reply from this tree: return to the baseline gate and restart on the
-updated head. Handle all CI and feedback together, test, commit, and plain-push
-once—never force, rebase, or retry a stale decision. Push only what the fix itself
-changed, from the exact snapshot HEAD.
+without advancing. A base tip that advances while the fix is being written is not by
+itself a reason to throw that fix away — on a busy base nothing would ever get pushed.
+Push the fix and let the next tick see the newer base. Only a base that has become
+genuinely unmergeable with this head invalidates the work: publish nothing from that
+tree and return to the baseline gate. Handle all CI and feedback together, test,
+commit, and plain-push once—never force, rebase, or retry a stale decision. Push only
+what the fix itself changed, from the exact snapshot HEAD.
 
 Push before claiming a fix. Before every comment/reply/thread resolution, verify the
 current snapshot. After a push or any conversation mutation, capture a new complete
