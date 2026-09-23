@@ -492,7 +492,7 @@ git clone -q "$source_remote" "$source_checkout"
 original_source_head=$(git -C "$source_checkout" rev-parse HEAD)
 git -C "$source_seed" -c user.name=test -c user.email=test@example.com \
   commit --allow-empty -m second >/dev/null
-git -C "$source_seed" push -q
+git -C "$source_seed" push -q origin HEAD:main
 expected_source_head=$(git -C "$source_seed" rev-parse HEAD)
 printf '0\n' > "$maintenance_state/maintenance-last-check"
 printf 'new remote preference\n' > "$maintenance_state/instruction.md"
@@ -512,5 +512,57 @@ assert_eq "$(git -C "$maintenance_state/source" rev-parse HEAD)" "$expected_sour
 assert_eq "$(cat "$maintenance_state/maintenance-source-updated")" "$expected_source_head"
 grep -F "source_updated=$expected_source_head" "$TEMP_ROOT/maintenance-source.out" >/dev/null ||
   fail 'maintenance did not report the source fast-forward'
+
+
+# Issue staging round-trips a stage bound to the issue's updated_at, bumps the
+# resume count on each re-save, refuses a moved issue with exit 3, and prunes a
+# stage whose workspace vanished without any network call.
+STAGE="$ROOT/skills/fix-assigned-issues/scripts/issue-stage.sh"
+stage_state="$TEMP_ROOT/stage-state"
+stage_home="$TEMP_ROOT/stage-home"
+stage_ws="$stage_home/stage-ws"
+mkdir -p "$stage_state" "$stage_ws"
+stage_base=$(printf '%040d' 7 | tr 7 a)
+printf 'understood X; done Y; next: Z\n' > "$TEMP_ROOT/stage-notes"
+HOME="$stage_home" GOOD_FELLOW_STATE_DIR="$stage_state" "$STAGE" save acme app 5 \
+  2026-09-18T00:00:00Z "$stage_base" "$stage_ws" "$TEMP_ROOT/stage-notes"
+stage_row=$(HOME="$stage_home" GOOD_FELLOW_STATE_DIR="$stage_state" "$STAGE" show)
+assert_eq "$stage_row" "$(printf 'acme\tapp\t5\t2026-09-18T00:00:00Z\t%s\t%s\t0' "$stage_base" "$stage_ws")"
+assert_eq "$(HOME="$stage_home" GOOD_FELLOW_STATE_DIR="$stage_state" "$STAGE" staged-workspaces)" "$stage_ws"
+assert_eq "$(HOME="$stage_home" GOOD_FELLOW_STATE_DIR="$stage_state" "$STAGE" notes acme app 5)" 'understood X; done Y; next: Z'
+stage_match=$(HOME="$stage_home" GOOD_FELLOW_STATE_DIR="$stage_state" "$STAGE" match acme app 5 2026-09-18T00:00:00Z)
+assert_eq "$stage_match" "$(printf '0\t%s\t%s' "$stage_base" "$stage_ws")"
+
+HOME="$stage_home" GOOD_FELLOW_STATE_DIR="$stage_state" "$STAGE" save acme app 5 \
+  2026-09-18T00:00:00Z "$stage_base" "$stage_ws" "$TEMP_ROOT/stage-notes"
+stage_match=$(HOME="$stage_home" GOOD_FELLOW_STATE_DIR="$stage_state" "$STAGE" match acme app 5 2026-09-18T00:00:00Z)
+assert_eq "$(printf '%s\n' "$stage_match" | cut -f1)" 1
+
+set +e
+HOME="$stage_home" GOOD_FELLOW_STATE_DIR="$stage_state" "$STAGE" match acme app 5 2026-09-18T11:11:11Z \
+  > "$TEMP_ROOT/stage-moved.out" 2>&1
+stage_moved_status=$?
+set -e
+assert_eq "$stage_moved_status" 3
+
+# A stage whose workspace disappeared is crash debris: prune drops it before
+# ever needing the network (the gh stub would reject the call loudly).
+find "$stage_ws" -depth -delete
+HOME="$stage_home" GOOD_FELLOW_STATE_DIR="$stage_state" "$STAGE" prune 2> "$TEMP_ROOT/stage-prune.err"
+grep -F 'pruning stage with missing workspace' "$TEMP_ROOT/stage-prune.err" >/dev/null ||
+  fail 'missing-workspace stage was not pruned'
+set +e
+HOME="$stage_home" GOOD_FELLOW_STATE_DIR="$stage_state" "$STAGE" match acme app 5 2026-09-18T00:00:00Z >/dev/null 2>&1
+stage_gone_status=$?
+set -e
+assert_eq "$stage_gone_status" 1
+
+# A corrupt stage file is skipped with a warning instead of wedging the scan.
+printf 'truncated\n' > "$stage_state/fix-issues-stage-bad.state"
+HOME="$stage_home" GOOD_FELLOW_STATE_DIR="$stage_state" "$STAGE" show \
+  > "$TEMP_ROOT/stage-scan.out" 2> "$TEMP_ROOT/stage-scan.err" ||
+  fail 'stage show rejected the collection over one corrupt file'
+grep -F 'ignoring invalid state file' "$TEMP_ROOT/stage-scan.err" >/dev/null ||
+  fail 'missing corrupt stage warning'
 
 printf 'runtime state tests passed\n'
