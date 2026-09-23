@@ -20,8 +20,9 @@ Skills (each in `skills/<name>/SKILL.md`):
 - `create-pr` — commit, sync onto the current base, push, and open a PR from a
   working tree with changes.
 - `process-prs` — fix feedback on the user's PRs; review others' PRs (critical
-  issues when found; otherwise a concise, concrete rationale, with bare `LGTM` only
-  for extremely simple changes; fail closed on incomplete evidence or stale state,
+  issues block approval; the gist's review standards are always applied and their
+  findings reported as non-blocking; otherwise a concise, concrete rationale, with
+  bare `LGTM` only for extremely simple changes; fail closed on incomplete evidence or stale state,
   approve only when clean and review was requested, leave a visible HEAD-bound
   waiting outcome when external gates block approval, and persist fair round-robin
   progress plus HEAD/state-bound handoffs across bounded runs).
