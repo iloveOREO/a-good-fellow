@@ -603,8 +603,12 @@ describe_external_change() {
   [ "$old_base" = "$new_base" ] || printf 'pr-review-guard: changed: base %s -> %s\n' "$old_base" "$new_base" >&2
   old_index=$(snapshot_line "$old" 12)
   new_index=$(snapshot_line "$new" 12)
-  listed=$(LC_ALL=C awk -v old="$old_index" -v new="$new_index" '
-    BEGIN {
+  # The indexes go through stdin, not `-v`: a single exec argument is capped at
+  # 128 KiB, and an E2BIG exit would replace this function's exit-3 contract.
+  listed=$(printf '%s\n%s\n' "$old_index" "$new_index" | LC_ALL=C awk '
+    NR == 1 { old = $0; next }
+    NR == 2 { new = $0; next }
+    END {
       n = split(old, o, " "); for (i = 1; i <= n; i++) { split(o[i], f, "|"); seen[o[i]] = 1; oid[f[2]] = 1 }
       m = split(new, w, " ")
       for (i = 1; i <= m; i++) {
