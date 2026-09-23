@@ -4,11 +4,20 @@ Shared rules for every good-fellow skill. Each skill instructs the agent to read
 file first. These rules override any conflicting habit or default; only the SKILL.md
 being executed and the invoking prompt rank above them.
 
+That ranking governs procedure, write safety, and gates. It never narrows review
+depth: what a review must examine and report is set by the gist's review standards
+(§1). A SKILL.md decides what may be approved or published; it does not decide that a
+gist standard is out of scope. If a SKILL.md sentence reads as excluding a gist
+standard, apply the gist for what to look at and report, and the SKILL.md for the
+verdict.
+
 ## 1. Personal instructions (the gist)
 
 The user keeps standing instructions in a GitHub gist file named
 `good-fellow-instruction.md`. It governs tone, language, repos to prioritize or avoid,
-review taste, and anything else the user cares about. Apply it to **every** GitHub task.
+review taste, and anything else the user cares about. Apply it to **every** GitHub task,
+including to every subagent a task delegates to: pass the relevant sections along
+verbatim rather than paraphrasing them into a narrower brief.
 
 - Cached copy: `~/.good-fellow/instruction.md`; last-synced baseline:
   `~/.good-fellow/instruction.remote`.
@@ -125,8 +134,14 @@ git -C <worktree> push origin HEAD:refs/heads/<headRefName>
   action visible afterwards is the substitute for asking permission first.
 
 Branch naming: `good-fellow/issue-<n>` for issue fixes, `good-fellow/<short-slug>`
-otherwise. Never commit to a branch you did not create, except pushing fixes to the
-head branch of the **user's own** PR.
+otherwise. Never commit to a branch you did not create, except on the head branch of
+the **user's own** PR, where both a fix and a baseline merge of that PR's own base
+branch may be pushed. The baseline merge is allowed only as `process-prs` §2A scopes
+it — never on someone else's PR, never as a rebase or force-push, and never carrying a
+fix inside the merge commit. Such a merge always carries a
+`Good-Fellow-Baseline-Merge: <base-sha>` trailer; that trailer, not the commit's
+two-parent shape, is what later identifies the merge as ours, so a merge the author
+made by hand is never mistaken for one we pushed.
 
 ## 4. Bot marker
 
