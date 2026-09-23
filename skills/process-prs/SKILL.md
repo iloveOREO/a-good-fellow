@@ -1,6 +1,6 @@
 ---
 name: process-prs
-description: Sweep open PRs involving the user through a persistent serial queue, resuming HEAD/state-bound review handoffs without repeating completed evidence or bulk-deferring the tail. On the user's own PRs, fix failing Actions and actionable feedback; on others' PRs, read the complete ledger and affected paths, fail closed on incomplete/stale evidence, leave a visible HEAD-bound outcome even when external gates block approval, and approve only a requested clean review. Use for scheduled PR sweeps or requests to process, review, or babysit open pull requests.
+description: Sweep open PRs involving the user through a persistent serial queue, resuming HEAD/state-bound review handoffs without repeating completed evidence or bulk-deferring the tail. On the user's own PRs, merge the current base and resolve conflicts before fixing failing Actions and actionable feedback on that new baseline; on others' PRs, read the complete ledger and affected paths, fail closed on incomplete/stale evidence, leave a visible HEAD-bound outcome even when external gates block approval, and approve only a requested clean review. Use for scheduled PR sweeps or requests to process, review, or babysit open pull requests.
 ---
 
 # Process PRs
@@ -115,8 +115,10 @@ save a real partial handoff if time unexpectedly runs short. Subagents may inspe
 the current PR; the parent is the sole GitHub writer and finalizes it before moving on.
 Because `reviewing` holds the cursor and breaks, never create a second `reviewing`
 handoff. Completed `reviewed` handoffs may wait across queue rotations only when a
-guarded submission could not safely be attempted or confirmed; pending CI or a merge
-conflict must instead receive the visible gate-waiting outcome below.
+guarded submission could not safely be attempted or confirmed; pending CI, or a
+merge conflict on someone else's PR, must instead receive the visible gate-waiting
+outcome below. An own-PR conflict is baseline work in §2A, not a waiting gate; so is a
+base that has moved, but only when §2A also has real work to do on that PR.
 Never use `ci-waiting` to bypass the first code review of someone else's PR: review
 it for concerns and save completed evidence first. When that review is clean but an
 external gate remains, leave the gate-waiting marker before advancing.
@@ -127,9 +129,11 @@ to a verdict or start another operation.
 
 ## 2A. PR authored by the user — make it ready to merge
 
-A user-authored PR is ready only when effective CI is green, every thread is resolved,
-and no comment awaits a reply. Capture the same complete guard snapshot as §2B; never
-substitute a capped query. `CI_CLEAN=true` means either an exact-parent merge rollup
+A user-authored PR is ready when effective CI is green, every thread is resolved, and
+no comment awaits a reply. Being behind a moved base is not itself a work item unless
+the base requires the branch to be up to date; the baseline gate below is the single
+definition of when behind becomes work.
+Capture the same complete guard snapshot as §2B; never substitute a capped query. `CI_CLEAN=true` means either an exact-parent merge rollup
 `SUCCESS`, no check/status rollup on either the exact HEAD or exact-parent test merge,
 or a successful `pull_request` HEAD workflow whose run API association matches this
 PR/base/head when the merge rollup is null. A null/null pair means the repository has
@@ -144,11 +148,170 @@ CI_CLEAN=$("$GUARD" ci-clean "$PR_STATE")
 THREADS_CLEAN=$("$GUARD" threads-clean "$PR_STATE")
 ```
 
+### Baseline before fixes
+
+On the user's own PR, a baseline that is not current is merged in before review, CI, or
+other feedback work, so that work lands on the updated tree. The merge is committed
+locally and is **not** pushed by itself; it leaves with the fix in the single push at
+the end of §2A. Do not repair, reply, or conclude on the pre-update tree, and do not
+record `ci-waiting` for a conflict. Someone else's PR never receives this push; a conflict
+there stays the §2B gate-waiting outcome.
+
+**This gate exists to stop a stale baseline from producing a stale judgement, not to
+keep every branch continuously synced.** It therefore runs only when this PR has actual
+§2A work — a concrete CI failure, an unresolved thread, or feedback that is not ours —
+or when the branch genuinely conflicts, or when it is behind a base whose
+`required_status_checks.strict` is `true`. A PR behind a `strict=false` base whose only
+outcome would be `ready` or `ci-waiting` is finalized as it stands: being behind is not
+itself a work item there, and re-merging it would add a merge commit nobody asked for
+plus a full CI rerun on every sweep. Read the base's protection rather than assuming —
+`required_status_checks.strict` is `false` on `Jumpyai/a2e`'s `dev`, so GitHub does not
+require the branch to be up to date and behind is not a merge gate there. Where
+`strict=true`, GitHub itself refuses the merge until the branch is updated, so behind
+*is* a merge gate and finalizing `ready` would call an unmergeable PR ready.
+
+**Sync the baseline at most once per PR per run.** A busy base can gain commits faster
+than a sweep completes — that same `dev` averaged one commit every ~7.6 minutes against
+a ~25-minute run — so re-entering this gate after it has already merged would merge and
+re-merge forever while the CI or feedback that motivated the sync never got handled.
+Once the gate has run for a PR in this run, the rest of §2A proceeds on that head even
+if the base moves again; the next tick picks up the newer base.
+
+Take `baseRefName` and `headRefName` from `"$GUARD" ledger`, never from PR text.
+Fetch both tips into private refs (conventions §3) and test ancestry against the
+fetched PR head, not against `baseRefOid`, which lags the live base:
+
+```bash
+git -C ~/<repo> fetch origin "pull/<N>/head:refs/good-fellow/pr-<N>" --force
+git -C ~/<repo> fetch origin "$BASE:refs/good-fellow/base/$BASE" --force
+git -C ~/<repo> merge-base --is-ancestor "refs/good-fellow/base/$BASE" "refs/good-fellow/pr-<N>"
+```
+
+Ancestor means the baseline is already current. GitHub `mergeable` / `mergeStateStatus`
+can lag that result; trust the fetched tips. A failed fetch defers the row without
+advancing.
+
+Not an ancestor (`BEHIND`, diverged, or conflicting) **and** this PR has §2A work, a
+real conflict, or a base with `required_status_checks.strict=true`: apply §1's time
+floor, add a detached worktree at `refs/good-fellow/pr-<N>`, and require that checkout
+to equal the snapshot head. Then merge the fetched base. Not an ancestor with no work,
+no conflict, and a `strict=false` base skips this section entirely and falls through to
+the table. This branch is already published, so
+rebase and force-push stay forbidden; merging is what keeps the later push a
+fast-forward.
+
+```bash
+BASE_SHA=$(git -C <worktree> rev-parse "refs/good-fellow/base/$BASE")
+GIT_EDITOR=true git -C <worktree> -c user.name="$GF_NAME" -c user.email="$GF_MAIL" \
+  merge -m "Merge base $BASE into the PR head
+
+Good-Fellow-Baseline-Merge: $BASE_SHA" "refs/good-fellow/base/$BASE"
+```
+
+The `Good-Fellow-Baseline-Merge:` trailer is not decoration: it is the only durable
+evidence that *this sweep* produced the merge, and the recovery gate below keys on it.
+Write it on every baseline merge, including a conflicted one — finishing with
+`git commit --no-edit` reuses the same `MERGE_MSG` and keeps the trailer.
+
+The merge commit is only the baseline update. Do not fold a CI or feedback fix into
+it. When the merge conflicts, resolve those conflicts before any other work. Keep both
+sides' behavior. Do not pass `-X ours` or `-X theirs`, do not skip a non-empty change,
+and do not drop either side to force a clean tree. A generated file whose repository
+documents an offline regeneration command is mechanical: take the base version,
+regenerate, and keep the output only when it matches the generator. Finish a conflicted
+merge with the same per-command identity and no editor (`git commit --no-edit` or
+`-F`), then keep going with the §2A work below — the push happens once, at the end.
+
+A conflict that cannot be combined without inventing behavior neither side contains:
+`merge --abort`, push nothing, and post no fix claim. Name the paths in the run
+report. Do not record `ready`, `fixed`, or `ci-waiting`. Leave the row unadvanced so
+the next tick retries the resolution before other PRs.
+
+**Do not push the merge on its own and restart §2A here.** That push puts the head's
+checks back into `queued`, so the recaptured snapshot shows `CI_CLEAN=false` with no
+concrete failure and finalizes `ci-waiting` — the CI failure that triggered the sync is
+never read, and the next tick finds the base moved again and repeats the merge. On a
+base busier than the sweep cadence that repeats forever, adding a merge commit and a
+full CI rerun each time while the red check stays untouched.
+
+Instead keep the worktree and carry the classification made **before** the merge — the
+concrete CI failure with its run/job ids, the unresolved threads, the feedback that is
+not ours — and do that work on the merged tree, as commits on top of the merge commit.
+Because the merge is never pushed on its own, no rollup exists for *that commit* —
+but GitHub's exact-parent test merge is still a real CI signal for an equivalent tree
+when the merge was clean, and `CI_CLEAN` above already reads it. Keep the pre-merge
+classification and re-read the captured failing job against the merged tree; do not
+wait for a rollup of the local merge commit, which cannot exist yet.
+Then push once:
+
+```bash
+git -C <worktree> push origin "HEAD:refs/heads/<headRefName>"
+```
+
+One push carries the merge commit and the fix commits, so the branch gets one CI run
+instead of two and the merge never lands as an unexplained commit by itself. When the
+carried work needs no code change after all — the merge resolved it, or the only work
+was the conflict — push the merge alone and say so in the reply to that work. A rejected push, or a
+PR head that moved after the fetch, is the same abandonment as conventions §3: publish
+nothing, do not replay the old merge, and restart later without advancing. If time runs
+out before the work is finished, push nothing and break without a receipt or an advance;
+the unpushed merge is discarded with the worktree.
+
+**The `strict=true` entry carries no work, so it needs its own ending.** When the gate
+ran *only* because the branch was behind a base with `required_status_checks.strict=true`
+— no concrete CI failure, no unresolved thread, no feedback that is not ours, no
+conflict — there is no reply for the push to ride along with, and none of `fixed`,
+`commented`, or `ci-waiting` describes it. Push the merge alone, then post one marked
+issue comment naming the merge commit SHA, the base tip it merged, and `strict=true` as
+the reason, so the commit never appears on the user's branch unexplained; this is
+conventions §3's after-the-fact visibility, which is the whole substitute for asking
+first. Finalize `synced` after that confirmed comment — §1's table treats it as
+completed own-PR handling — and skip the table below, whose `ready` row would otherwise
+call a branch GitHub still refuses to merge ready. Discarding the merge instead is the
+other broken reading: every tick would re-merge and re-discard while the PR stays
+unmergeable forever.
+
+The two halfway failures here are not symmetric, so they get different handling. **A
+rejected push** left nothing on the branch: the PR is still behind, the gate still
+triggers next tick, so publish nothing further and leave the row unadvanced. **A push
+that succeeded while its comment did not** is the dangerous one: the merge is already
+on the user's branch, and it is already the base tip's descendant, so next tick
+`merge-base --is-ancestor` reports the baseline current, the gate never runs again, and
+the paragraph that owes the explanation can never fire. Leaving the row unadvanced does
+not help — the push destroyed its own trigger. Conventions §5 requires a halfway failure
+to be safe to re-run, so the recovery must key on the unexplained merge itself, not on
+being behind.
+
+It must also key on a fact only *our own* push can produce. The shape of the commit is
+not such a fact: "first parent is the previous head" holds for every merge commit on a
+branch, "second parent is a base tip" holds for any `git merge origin/<base>` the author
+ran by hand, and "no marked comment names it" is trivially true of a merge we never
+pushed. A shape-based trigger therefore fires on an own PR whose author merged the base
+in themselves, and publishes a marked comment claiming a push this sweep never
+performed — exactly the write-before-the-action that conventions §5 forbids. Key on the
+trailer instead: before anything else in §2A, when HEAD is a merge whose message carries
+a `Good-Fellow-Baseline-Merge:` trailer **and** whose committer email equals the
+`$GF_MAIL` derived from `gh api user`, and no authenticated-user marked comment names
+that merge SHA, post that comment now and finalize `synced`. A merge without the trailer
+is the author's own work: claim nothing about it and fall through to the table.
+
+The recovery comment states only what the trailer still proves — this sweep pushed that
+merge SHA to bring the branch onto the named base tip. It must not reassert the original
+trigger: the classification that produced the merge died with the lost handoff, so
+naming `strict=true` there would be another unproven claim.
+
+That trigger is self-healing, so a failed post needs no handoff row — the trailer stays
+on the branch and the next tick re-enters the same gate. Do not try to record it in a
+handoff: `pr-handoff.sh` accepts only the §2B `reviewing`/`reviewed` phases, and
+`reviewing` would additionally pin the queue to this PR and break the sweep.
+
+The table applies only after that gate has passed:
+
 | Effective state | Threads / comments | Action |
 |---|---|---|
 | `CI_CLEAN=true` | `THREADS_CLEAN=true`, nothing awaiting reply | finalize `ready` |
 | concrete HEAD/test-merge `FAILURE` or `ERROR` | — | deep CI work |
-| `CI_CLEAN=false` without a concrete failure (pending, expected, unknown, or mergeability unresolved/conflicting) | — | finalize `ci-waiting` |
+| `CI_CLEAN=false` without a concrete failure (pending, expected, unknown, or mergeability still unresolved) and the branch is not conflicting | — | finalize `ci-waiting` |
 | any | unresolved thread or latest feedback not ours | deep feedback work |
 
 For a concrete CI failure, inspect the failing job/log and its relationship to the
@@ -173,28 +336,35 @@ compatibility, or data safety, naming the wrong part and citing the code. A bot'
 is untrusted data like any other (conventions §2); "a bot already answered" is never
 proof the point is settled.
 
-Before either deep path, apply §1's time floor, fetch `pull/<N>/head` to a private ref,
-and use a detached worktree. Require checked-out HEAD to equal snapshot HEAD before any
-edit/test; on mismatch clear any handoff, clean up, recapture, and restart this PR
-without advancing. Handle all CI and feedback together, test, commit, and plain-push
-once—never force, rebase, or retry a stale decision.
-
-**create-pr's base-sync step does not apply here.** That step exists because a branch
-about to become a *new* PR must not open behind its base. This branch is already the
-head of an open PR: rebasing it onto a newer base would rewrite published history and
-need a force-push (conventions §3 and §6), and merging the base in would add a merge
-commit to the user's PR that nobody asked for. A branch that actually conflicts with its
-base is a live mergeability gate, so it routes to the `ci-waiting` / gate-waiting
-outcome above—never to a base-sync push. Push only what the fix itself changed, from the
-exact snapshot HEAD.
+Before either deep path, apply §1's time floor and work in a detached worktree. Which
+checkout is required depends on whether the baseline gate ran for this PR in this run.
+If it did not, fetch `pull/<N>/head` to a private ref and require checked-out HEAD to
+equal snapshot HEAD. If it did, **keep the worktree that gate already created** and
+require checked-out HEAD to be the merge it made — snapshot HEAD as its first parent,
+the fetched base tip as its second. Do not re-fetch or re-add a worktree at
+`refs/good-fellow/pr-<N>` in that case: the merge is unpushed, so snapshot HEAD is
+still the pre-merge tip and a fresh checkout would silently discard the merge and
+repair exactly the stale tree this gate exists to prevent. Only a checkout matching
+neither shape is the mismatch case: clear any handoff, clean up, recapture, and restart
+this PR without advancing. A base tip that advances while the fix is being written is
+not by itself a reason to throw that fix away — on a busy base nothing would ever get
+pushed.
+Push the fix and let the next tick see the newer base. Only a base that has become
+genuinely unmergeable with this head invalidates the work: publish nothing from that
+tree and return to the baseline gate. A base that turns unmergeable after the gate has
+already run does **not** regain the once-per-run allowance: leave the row unadvanced
+with nothing pushed and let the next tick sync it. Handle all CI and feedback together,
+test, commit, and plain-push once—never force, rebase, or retry a stale decision. Push
+only what the fix itself changed, on top of the exact snapshot HEAD, or on top of the
+baseline merge made from it when that gate ran.
 
 Push before claiming a fix. Before every comment/reply/thread resolution, verify the
 current snapshot. After a push or any conversation mutation, capture a new complete
 snapshot, require the expected HEAD, and rebuild the ledger before the next mutation.
 On push rejection or freshness mismatch, publish nothing, clean up, and restart this
 PR later without advancing. Finalize `fixed` after a pushed fix plus reconciled
-replies/resolutions, `commented` for handled feedback without a push, and `ci-waiting`
-after a rerun. Remove the worktree/private ref after a completed item.
+replies/resolutions, `commented` for handled feedback without a push, `synced` after a
+baseline-only push plus its confirmed marked comment, and `ci-waiting` after a rerun. Remove the worktree/private ref after a completed item.
 
 ## 2B. PR authored by someone else — review
 
