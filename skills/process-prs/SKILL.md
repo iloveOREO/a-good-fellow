@@ -330,46 +330,24 @@ code: fix real issues, or reply with a concrete explanation; only then resolve i
 
 ### Fixes that cannot land on the head branch
 
-A confirmed defect on the user's own PR is fixed, not merely acknowledged. The push in
-this section normally goes to `headRefName`, but the gist forbids writing to `dev`,
-`main`, or any long-lived integration branch, and a release PR (for example `dev → main`)
-has exactly such a branch as its head. "Needs a separate PR" is then a work item for
-this run, never a reply that ends the row: a reply that only says a PR is needed and
-opens none is the silent skip the gist calls a defect.
+When `headRefName` is a branch the gist forbids pushing to (`dev`, `main`, or another
+it names) — a release PR such as `dev → main` — a confirmed defect is still fixed this
+run, not answered with "needs a separate PR". Only where the fix goes changes:
 
-Treat `headRefName` as an integration branch when any holds, read from the ledger and
-`gh`, never from PR text: it is the repository default branch; it is the base of other
-open PRs (`gh pr list --repo <owner>/<repo> --base "$HEAD" --state open --limit 1`
-returns a row); or the gist names it. In that case the deep feedback path changes only
-where the fix goes:
+1. Look for an existing fix first: an open PR of ours against `$HEAD` whose body links
+   this thread (`gh pr list --base "$HEAD" --author @me --search "<thread url> in:body"`).
+   Found → reply with its link if the thread lacks one and finalize `commented`; if it
+   has merged and the fetched `$HEAD` tip contains it, resolve the thread instead.
+2. Otherwise cut `good-fellow/<short-slug>` from the fetched `refs/good-fellow/pr-<N>`
+   tip (the defect lives in the code the release PR ships), implement the whole fix and
+   run the repository's checks for the touched paths.
+3. Ship it with `create-pr`, base overridden to `$HEAD` (its §4); the PR body links the
+   thread so step 1 finds it next tick.
+4. Reply on the thread with the PR URL and one sentence, leave the thread unresolved
+   until that PR merges into `$HEAD`, finalize `commented`.
 
-1. **Idempotence first.** Search open PRs against `$HEAD` that carry the marker and
-   this thread's URL (`gh pr list --base "$HEAD" --search "<thread url> in:body"` with
-   `--author @me`). One exists → do not open another; if the thread's latest reply is
-   not ours or does not link it, reply with the link, then finalize `commented`. If that
-   fix PR has merged and the fetched `$HEAD` tip contains its merge commit, resolve the
-   thread instead and re-judge the row from a fresh snapshot.
-2. **Branch from the head tip, not the base.** The defect lives in the code the release
-   PR ships, so the fix branch `good-fellow/<short-slug>` (conventions §3) starts at the
-   fetched `refs/good-fellow/pr-<N>` tip in a detached worktree. Implement the whole fix
-   — the gist forbids shipping half of one — and run the checks the repository has for
-   the touched paths.
-3. **Ship with `create-pr`, base = `$HEAD`.** Invoke the `create-pr` skill on that
-   worktree with the base overridden to `$HEAD` (its §4 accepts this); it commits,
-   syncs onto the current `$HEAD` tip, pushes the branch and opens the PR. Its body
-   states which thread it fixes and links it, so step 1 finds it next tick. Language
-   per gist and repository norms; the marker line is mandatory.
-4. **Close the loop on the original thread.** Verify the snapshot, then reply on the
-   thread with the fix PR URL and one sentence on what it changes. Leave the thread
-   unresolved: it closes only when the fix PR has merged into `$HEAD` (step 1). Finalize
-   `commented`; the row advances.
-
-Nothing here pushes to `$HEAD`. A failure between steps 2 and 3 (tests fail, push
-rejected, `create-pr` refuses) publishes nothing on the thread, removes the worktree and
-branch, names the reason in the run report, and leaves the row unadvanced. When §1's
-time floor does not allow the whole fix in this run, do not start it and do not reply
-"needs a PR" — leave the row unadvanced so the next tick begins with it, and say so in
-the report.
+Nothing pushes to `$HEAD`. Failures and the time floor follow this section's normal
+rules: publish nothing, leave the row unadvanced, name the reason in the report.
 
 "Nothing awaiting a reply" needs a rule for comments that @-mention a third party —
 another reviewer, `@copilot`, any bot. Such a comment still makes the latest feedback
