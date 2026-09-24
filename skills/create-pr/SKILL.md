@@ -165,30 +165,46 @@ Body structure (language per gist / repo norms):
 No boilerplate beyond that; do not enable auto-merge; do not request reviewers unless
 the gist says to.
 
-## 6. Land the user's own change locally (a-good-fellow only)
+## 6. a-good-fellow itself: downstream `deploy`, upstream PRs
 
-`/root/a-good-fellow` is the user's fork; its `origin` is `iloveOREO/a-good-fellow`
-and the contribution target is the upstream `jumpjump1910/a-good-fellow`. The PR goes
-**upstream** (`gh pr create --repo jumpjump1910/a-good-fellow`, the fork's parent).
-The user does not wait for that review to use their own change: right after the PR is
-open, fast-forward the fork's `main` to the same commit so the managed source and every
-later sweep run it —
+`/root/a-good-fellow` is a long-lived fork (`origin` = `iloveOREO/a-good-fellow`) of
+the upstream `jumpjump1910/a-good-fellow`, kept in the merge-based downstream model:
 
-```bash
-git -C <worktree> push origin HEAD:refs/heads/main   # fast-forward only, never --force
-```
+| Branch | Role | How it changes |
+|---|---|---|
+| `main` | mirror of upstream `main`; never carries local commits | fast-forward from upstream only |
+| `deploy` | the downstream mainline; always ahead of upstream; what the cron runtime runs | merge the change branch in directly, no PR |
+| `good-fellow/<slug>` | one change | cut from upstream `main`, cherry-pick the relevant commits from `deploy` if they were made there |
 
-— and publish the branch as the live deployment exactly as `onboard` Step 5 does
-(immutable `deploy-*` copy, script syntax checks, `tests/runtime-state.sh`,
-`runtime-version` = this HEAD, atomic `deployment-current` switch, keep the three
-newest deployments; reuse the current runner when its text did not change). If a sweep
-holds the lock, skip the dry-run smoke test, publish anyway (the running sweep keeps its
-own immutable copy) and verify from the next tick's log. Report the PR URL, the fork
-`main` SHA, and the live deployment directory.
+PRs exist only to contribute upstream. A change branch is cut from upstream `main`
+(`git fetch origin main:refs/good-fellow/base/main` after `main` has been synced), so the
+PR carries that one change and nothing `deploy` is ahead by; opening it from a branch
+based on `deploy` re-submits every unmerged downstream commit. Open with
+`gh pr create --repo jumpjump1910/a-good-fellow --base main --head iloveOREO:<branch>`.
+Machine-specific text (this section, deployment paths) stays in `deploy` and is not
+sent upstream. A change that depends on another still-open PR is cut from that PR's
+branch and says so in its body.
 
-The gist's "never push to `main`" rule protects shared integration branches such as
-`Jumpyai/a2e`; the user has stated that their own fork's `main` is exempt — a PR there
-is optional. Upstream merge is never the step that first delivers the user's change.
+The change reaches this machine the moment it exists, independent of upstream review:
+merge the branch into `deploy` (`git -C <worktree> push origin HEAD:refs/heads/deploy`
+when the branch is already based on `deploy`, otherwise a local `merge --no-edit` on a
+`deploy` checkout, then a plain push — never `--force`), fast-forward the managed source
+(`git -C ~/.good-fellow/source pull --ff-only`, its checkout tracks `origin/deploy`), and
+publish the deployment as `onboard` Step 5 does (immutable `deploy-*` copy, script syntax
+checks, `tests/runtime-state.sh`, `runtime-version` = the `deploy` tip, atomic
+`deployment-current` switch, keep the three newest; reuse the current runner when its
+text is unchanged). If a sweep holds the lock, skip the dry-run smoke test, publish
+anyway and verify from the next tick's log.
+
+Tracking upstream is the reverse merge: after upstream merges anything, fast-forward
+`main` and `git merge --no-edit main` into `deploy`. Commits that were cherry-picked
+upstream unchanged merge as no-ops; a squash-merged or edited one conflicts once —
+resolve it in favour of upstream and move on. `deploy` is never rebased or rebuilt.
+
+The gist's "never push to `dev`/`main`" rule guards shared integration branches such as
+`Jumpyai/a2e`; `deploy` is this user's own downstream line, and the user has confirmed
+it takes merges directly. Report the upstream PR URL, the `deploy` SHA, and the live
+deployment directory.
 
 ## 7. Report
 

@@ -18,10 +18,10 @@ Skills (each in `skills/<name>/SKILL.md`):
 - `join-discussions` — reply to Discussions that @mention the user.
 - `fix-assigned-issues` — fix assigned issues and open PRs.
 - `create-pr` — commit, sync onto the current base, push, and open a PR from a
-  working tree with changes. For this repository the PR goes upstream
-  (`jumpjump1910/a-good-fellow`); the fork's `main` is fast-forwarded to the same
-  commit and the branch is published as the live local deployment at once, so the
-  user's own change runs here immediately rather than after an upstream merge.
+  working tree with changes. This checkout is a downstream fork: `main` mirrors
+  upstream `jumpjump1910/a-good-fellow`, `deploy` is the local mainline the cron
+  runtime runs (changes merge in directly, no PR), and PRs exist only to contribute
+  upstream, cut from upstream `main` so each carries one change (create-pr §6).
 - `process-prs` — fix feedback on the user's PRs (a confirmed defect on a release PR
   whose head is `dev`/`main` is fixed on its own branch and shipped as a separate PR
   against that head via `create-pr`, never pushed to the head directly); review others' PRs (critical
