@@ -18,16 +18,12 @@ Skills (each in `skills/<name>/SKILL.md`):
 - `join-discussions` — reply to Discussions that @mention the user.
 - `fix-assigned-issues` — fix assigned issues and open PRs.
 - `create-pr` — commit, sync onto the current base, push, and open a PR from a
-  working tree with changes. This checkout is a downstream fork: `main` mirrors
-  upstream `jumpjump1910/a-good-fellow`, `deploy` is the local mainline the cron
-  runtime runs (changes merge in directly, no PR), and PRs exist only to contribute
-  upstream, cut from upstream `main` so each carries one change (create-pr §6).
+  working tree with changes.
 - `process-prs` — fix feedback on the user's PRs (a confirmed defect on a release PR
   whose head is `dev`/`main` is fixed on its own branch and shipped as a separate PR
   against that head via `create-pr`, never pushed to the head directly); review others' PRs (critical
-  issues block approval; the gist's review standards are always applied and their
-  findings reported as non-blocking; otherwise a concise, concrete rationale, with
-  bare `LGTM` only for extremely simple changes; fail closed on incomplete evidence or stale state,
+  issues when found; otherwise a concise, concrete rationale, with bare `LGTM` only
+  for extremely simple changes; fail closed on incomplete evidence or stale state,
   approve only when clean and review was requested, leave a visible HEAD-bound
   waiting outcome when external gates block approval, and persist fair round-robin
   progress plus HEAD/state-bound handoffs across bounded runs).
