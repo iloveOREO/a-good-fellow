@@ -18,7 +18,10 @@ Skills (each in `skills/<name>/SKILL.md`):
 - `join-discussions` — reply to Discussions that @mention the user.
 - `fix-assigned-issues` — fix assigned issues and open PRs.
 - `create-pr` — commit, sync onto the current base, push, and open a PR from a
-  working tree with changes.
+  working tree with changes. For this repository the PR goes to the user's own
+  repository (`origin`, not the upstream fork parent) and the branch is published as
+  the live local deployment immediately: the user's own PRs take effect here when
+  opened, never only after a merge elsewhere.
 - `process-prs` — fix feedback on the user's PRs (a confirmed defect on a release PR
   whose head is `dev`/`main` is fixed on its own branch and shipped as a separate PR
   against that head via `create-pr`, never pushed to the head directly); review others' PRs (critical

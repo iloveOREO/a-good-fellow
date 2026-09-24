@@ -165,7 +165,25 @@ Body structure (language per gist / repo norms):
 No boilerplate beyond that; do not enable auto-merge; do not request reviewers unless
 the gist says to.
 
-## 6. Report
+## 6. Deploy the user's own change locally (a-good-fellow only)
+
+When the repository is a-good-fellow itself, the PR targets the user's own repository
+(`iloveOREO/a-good-fellow`, the `origin` remote), never the upstream it was forked
+from: `gh` defaults to the parent repository on a fork, so pass `--repo` explicitly
+from `git remote get-url origin`, and the user's own PR takes effect on this machine
+the moment it is opened. Right after `gh pr create` succeeds, materialize and publish a
+deployment from this branch exactly as `onboard` Step 5 does (immutable `deploy-*`
+copy, script syntax checks, `tests/runtime-state.sh`, `runtime-version` = this branch's
+HEAD, atomic `deployment-current` switch, keep the three newest deployments). Reuse the
+current deployment's `run-good-fellow.sh` when the runner text did not change. If a
+sweep holds the lock, the dry-run smoke test cannot run; publish anyway (the running
+sweep keeps its own immutable copy) and verify from the next tick's log that the runner
+path is the new deployment. Say in the report which deployment directory is now live.
+
+Later fork/source synchronisation only catches the managed source up to what is
+already running; it must never be the step that first delivers the user's own change.
+
+## 7. Report
 
 Return the PR URL and the commit SHA(s), and say whether the branch was rebased or
 merged onto a newer base tip.
