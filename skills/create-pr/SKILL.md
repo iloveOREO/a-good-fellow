@@ -165,23 +165,30 @@ Body structure (language per gist / repo norms):
 No boilerplate beyond that; do not enable auto-merge; do not request reviewers unless
 the gist says to.
 
-## 6. Deploy the user's own change locally (a-good-fellow only)
+## 6. Land the user's own change locally (a-good-fellow only)
 
-When the repository is a-good-fellow itself, the PR targets the user's own repository
-(`iloveOREO/a-good-fellow`, the `origin` remote), never the upstream it was forked
-from: `gh` defaults to the parent repository on a fork, so pass `--repo` explicitly
-from `git remote get-url origin`, and the user's own PR takes effect on this machine
-the moment it is opened. Right after `gh pr create` succeeds, materialize and publish a
-deployment from this branch exactly as `onboard` Step 5 does (immutable `deploy-*`
-copy, script syntax checks, `tests/runtime-state.sh`, `runtime-version` = this branch's
-HEAD, atomic `deployment-current` switch, keep the three newest deployments). Reuse the
-current deployment's `run-good-fellow.sh` when the runner text did not change. If a
-sweep holds the lock, the dry-run smoke test cannot run; publish anyway (the running
-sweep keeps its own immutable copy) and verify from the next tick's log that the runner
-path is the new deployment. Say in the report which deployment directory is now live.
+`/root/a-good-fellow` is the user's fork; its `origin` is `iloveOREO/a-good-fellow`
+and the contribution target is the upstream `jumpjump1910/a-good-fellow`. The PR goes
+**upstream** (`gh pr create --repo jumpjump1910/a-good-fellow`, the fork's parent).
+The user does not wait for that review to use their own change: right after the PR is
+open, fast-forward the fork's `main` to the same commit so the managed source and every
+later sweep run it —
 
-Later fork/source synchronisation only catches the managed source up to what is
-already running; it must never be the step that first delivers the user's own change.
+```bash
+git -C <worktree> push origin HEAD:refs/heads/main   # fast-forward only, never --force
+```
+
+— and publish the branch as the live deployment exactly as `onboard` Step 5 does
+(immutable `deploy-*` copy, script syntax checks, `tests/runtime-state.sh`,
+`runtime-version` = this HEAD, atomic `deployment-current` switch, keep the three
+newest deployments; reuse the current runner when its text did not change). If a sweep
+holds the lock, skip the dry-run smoke test, publish anyway (the running sweep keeps its
+own immutable copy) and verify from the next tick's log. Report the PR URL, the fork
+`main` SHA, and the live deployment directory.
+
+The gist's "never push to `main`" rule protects shared integration branches such as
+`Jumpyai/a2e`; the user has stated that their own fork's `main` is exempt — a PR there
+is optional. Upstream merge is never the step that first delivers the user's change.
 
 ## 7. Report
 
