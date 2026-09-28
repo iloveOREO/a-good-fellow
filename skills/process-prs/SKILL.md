@@ -113,6 +113,11 @@ There is no per-run deep-item quota. After one item completes, start the next wh
 the same check passes. Once deep work starts, do not rush it because the queue is long;
 save a real partial handoff if time unexpectedly runs short. Subagents may inspect only
 the current PR; the parent is the sole GitHub writer and finalizes it before moving on.
+A subagent brief carries the same review scope as the parent: include the gist's
+review sections verbatim, ask for non-blocking findings as well as blocking ones, and
+never write "critical only", "no nits", or a time limit shorter than the budget the
+parent could actually give it. A subagent that returns "none" for a large slice
+without saying what it checked against each standard has not reviewed that slice.
 Because `reviewing` holds the cursor and breaks, never create a second `reviewing`
 handoff. Completed `reviewed` handoffs may wait across queue rotations only when a
 guarded submission could not safely be attempted or confirmed; pending CI or a merge
@@ -343,8 +348,15 @@ restart fresh. Never treat CI or mergeability-only drift as a new event.
   `submit-approve` for a direct user request and `submit-comment` otherwise.
 
 A confirmed state mismatch or guard exit 3 clears the handoff and restarts this PR
-from a fresh snapshot when time permits. Inability to verify preserves the handoff and
-breaks without advancing, exactly as the status-code case above requires.
+from a fresh snapshot when time permits. Exit 3 prints one `changed:` line per HEAD,
+base, or conversation item that differs; read them all before deciding what the
+restart covers. A HEAD move never explains the other lines: every listed comment,
+review, or thread must be read from the fresh snapshot's complete ledger and judged
+like any ledger entry, and the suppression ledger is rebuilt from that snapshot. Code
+already proved at an ancestor HEAD may be reused only for the diff it covered—later
+conversation is never covered by it, even when it arrived in the same run.
+Inability to verify preserves the handoff and breaks without advancing, exactly as
+the status-code case above requires.
 
 ### Step 3 — Review fresh or resume
 
@@ -376,8 +388,34 @@ A clean verdict requires all of:
 5. targeted tests or known exact-HEAD CI for the path. Runtime evidence that cannot be
    obtained leaves the review incomplete, never clean.
 
-Look only for critical correctness, data, security, compatibility, or concurrency
-issues—not summaries or nits. A publishable finding must be absent from the ledger.
+Two tiers of findings, both in scope. Blocking findings are critical correctness,
+data, security, compatibility, or concurrency issues; only these (plus unresolved
+concerns already on the ledger) decide `concern`/`waiting` versus `clean`. Every
+review also applies the gist's review standards—whether the change is the simplest
+route to its goal, reuse over new copies, duplication and per-request waste, and the
+fate of each non-blocking issue—and reports what it finds as non-blocking findings,
+each with a verdict (fix in this PR, or acceptable and why). They never block approval
+on their own, but a `clean` body that leaves out a finding the review made is
+incomplete. State unverified behavior as a risk, never as fact (a code path only one
+environment exercises, a key or config nobody has tested), and name changes that need
+an owner's business decision (prices, quotas, limits) rather than approving them
+silently. Summaries and style nits stay out. A publishable finding must be absent from
+the ledger.
+
+Two checks are always part of that scope. When the PR fixes a defect pattern at
+some call sites, search the repository for the same pattern and state whether
+unfixed sites remain (each one proved equivalent under the analogy rule below);
+describing the fix as complete without that search is an unproved claim. When the PR
+adds or relies on a regression test, confirm from scripts and workflow files that CI
+actually executes it; an empty search for its runner in the workflows is a finding to
+report, not a result to drop.
+
+Depth is judged by coverage, not by clock time. Before a `clean` verdict on a PR that
+spans several modules, the payload's `evidence` must record, per changed module, what
+was checked against each gist standard (or why it does not apply). A clean verdict
+reached with most of the run budget unused and no such record is not ready: go back
+and do the missing work instead of submitting.
+
 A finding that argues by analogy ("route X lacks the guard its sibling Y has") must
 first prove X and Y are functionally equivalent by reading both handlers to their
 implementations—never by path, prefix, or name similarity, which vendor/brand naming
@@ -390,11 +428,22 @@ root cause in the current ledger/payload, mark that exact comment seen when its
 snapshot field `seen=false`:
 
 ```bash
-"$GUARD" verify-external "$OWNER" "$REPO" "$NUMBER" "$PR_STATE"
+"$GUARD" verify-external "$OWNER" "$REPO" "$NUMBER" "$PR_STATE" &&
 gh api graphql -f query='mutation($id:ID!){
   addReaction(input:{subjectId:$id,content:EYES}){reaction{content}}
 }' -f id="$COMMENT_NODE_ID"
 ```
+
+A failed `verify-external` forbids the reaction in the same command or later; handle
+the exit code first (exit 3 restarts this PR as above).
+
+A `verdict=clean` outcome (every approval, and a clean comment) is refused while any
+issue or inline comment remains unseen, the viewer's own marker posts excepted. Reading
+a preview or only the newest comments is not judging: open each unseen comment in full,
+record its root cause and your conclusion, then react. A comment by the viewer's login
+without a marker was written by the user personally and states their position; it is
+judged like any concern and is never overridden or downgraded to "track later" unless
+the author resolved it in code or the user withdrew it.
 
 This applies to §2A feedback and §2B ledger comments; review summaries are not
 reactable. A 👀 is a visible read signal and prevents duplicate reactions, but alone
@@ -435,7 +484,9 @@ placeholder or call an unvisited item deferred.
 Build the body from the evidence, beginning clean reviews with `LGTM`, and end with
 exactly one marker bound to snapshot head/base/token and `action=comment|approve`
 plus `verdict=clean|concern|waiting`. Bare `LGTM` is only for unambiguous mechanical
-changes; otherwise name the checked risk areas in 1–3 concrete sentences.
+changes; otherwise name the checked risk areas in 1–3 concrete sentences, followed by
+the non-blocking findings (one line each, with file:line and verdict) when there are
+any.
 
 - New critical findings: one `verdict=concern` comment with file:line and a failing
   scenario, minus ledger duplicates.
@@ -453,6 +504,10 @@ changes; otherwise name the checked risk areas in 1–3 concrete sentences.
   suppresses nothing; route the clean predicates immediately.
 - No concern and effective CI/threads clean: `verdict=clean`; only here does a direct
   request use `submit-approve`, otherwise use `submit-comment`.
+- The viewer's latest approval sits on an older HEAD (or predates a new substantive
+  concern) and this outcome is not clean: the `concern`/`waiting` body must say the
+  earlier approval no longer reflects the current HEAD and name what re-approval
+  needs. The skill cannot dismiss an approval, so this visible note is the retraction.
 
 All writes go through `pr-review-guard.sh`; never call `gh pr comment/review` directly,
 request changes, close, or merge. Exit 3 means confirmed stale state: clear the
