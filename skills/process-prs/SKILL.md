@@ -165,6 +165,27 @@ same infrastructure failure repeats, comment with the step/log evidence. Never i
 a code fix when the cause is unknown. Judge every unresolved reviewer/Copilot item on
 code: fix real issues, or reply with a concrete explanation; only then resolve it.
 
+### Fixes that cannot land on the head branch
+
+When `headRefName` is a branch the gist forbids pushing to (`dev`, `main`, or another
+it names) — a release PR such as `dev → main` — a confirmed defect is still fixed this
+run, not answered with "needs a separate PR". Only where the fix goes changes:
+
+1. Look for an existing fix first: an open PR of ours against `$HEAD` whose body links
+   this thread (`gh pr list --base "$HEAD" --author @me --search "<thread url> in:body"`).
+   Found → reply with its link if the thread lacks one and finalize `commented`; if it
+   has merged and the fetched `$HEAD` tip contains it, resolve the thread instead.
+2. Otherwise cut `good-fellow/<short-slug>` from the fetched `refs/good-fellow/pr-<N>`
+   tip (the defect lives in the code the release PR ships), implement the whole fix and
+   run the repository's checks for the touched paths.
+3. Ship it with `create-pr`, base overridden to `$HEAD` (its §4); the PR body links the
+   thread so step 1 finds it next tick.
+4. Reply on the thread with the PR URL and one sentence, leave the thread unresolved
+   until that PR merges into `$HEAD`, finalize `commented`.
+
+Nothing pushes to `$HEAD`. Failures and the time floor follow this section's normal
+rules: publish nothing, leave the row unadvanced, name the reason in the report.
+
 "Nothing awaiting a reply" needs a rule for comments that @-mention a third party —
 another reviewer, `@copilot`, any bot. Such a comment still makes the latest feedback
 not ours, so it always reaches the feedback path; decide it by who owes the answer, not
