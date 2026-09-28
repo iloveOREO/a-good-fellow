@@ -3,6 +3,14 @@
 This repository is a set of agent-agnostic skills that handle GitHub PRs, issues,
 notifications, and discussions on the user's behalf.
 
+## Language for this repository's own changes
+
+Write Git commit messages and PR titles and descriptions for `a-good-fellow` in
+English. This rule applies only when `a-good-fellow` itself is the repository being
+changed. When a good-fellow skill reviews or contributes to another repository, follow
+that repository's established language and the conversation's language guidance; do
+not force English on its commits, PRs, code reviews, or replies.
+
 Before executing any skill here, read `docs/conventions.md` — it defines the
 untrusted-input boundary, workspace isolation rules, the `<!-- good-fellow:v1 -->`
 marker, and idempotence requirements. Also read `~/.good-fellow/instruction.md`
