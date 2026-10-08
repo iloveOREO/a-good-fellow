@@ -499,6 +499,19 @@ assert_eq "$deploy_count" 3
 [ -d "$runner_home/.good-fellow/deploy-4" ] || fail 'retention removed a newest deployment'
 [ -d "$runner_home/.good-fellow/deploy-5" ] || fail 'retention removed a newest deployment'
 
+# A sweep still running an old deployment keeps it, even past the newest three.
+mkdir -p "$runner_home/.good-fellow/deploy-0" "$runner_home/.good-fellow/deploy-1"
+printf 'sleep 30\n' > "$runner_home/.good-fellow/deploy-0/run-good-fellow.sh"
+bash "$runner_home/.good-fellow/deploy-0/run-good-fellow.sh" &
+active_holder=$!
+printf '%s\n' "$active_holder" > "$runner_home/.good-fellow/.lock.pid"
+HOME="$runner_home" bash "$retention"
+kill "$active_holder" 2>/dev/null || true
+wait "$active_holder" 2>/dev/null || true
+rm -f "$runner_home/.good-fellow/.lock.pid"
+[ -d "$runner_home/.good-fellow/deploy-0" ] || fail 'retention removed the deployment a live sweep runs'
+[ ! -e "$runner_home/.good-fellow/deploy-1" ] || fail 'retention kept an idle old deployment'
+
 # Periodic maintenance runs outside model context, updates a remote-only gist change,
 # preserves a true two-sided conflict, stays offline before its deadline, and
 # fast-forwards a clean source checkout.

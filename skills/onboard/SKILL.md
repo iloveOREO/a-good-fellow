@@ -249,7 +249,9 @@ Requirements the generated script must satisfy:
   the interactive skill symlinks in `~/.claude/skills` or `~/.codex/skills`.
 - **Log rotation**: delete logs in `~/.good-fellow/logs` older than 14 days.
 - **Deployment retention**: after a new pointer is published and verified, retain the
-  three newest real `deploy-*` directories and remove older immutable deployments.
+  three newest real `deploy-*` directories and remove older immutable deployments,
+  never the one a live lock holder is still running (upgrade mode publishes from
+  inside a sweep, and a manual redeploy can overlap one).
 - **Token-free maintenance gate**: before invoking an agent, run the bundled
   `maintenance-check.sh`. It stays offline between checks (48 hours by default),
   compares gist content without model context, preserves local edits/conflicts, and
@@ -555,6 +557,16 @@ mv -f "$POINTER_TMP" "$HOME/.good-fellow/deployment-current"
 mv -f "$LAUNCHER_TMP" "$HOME/.good-fellow/run-good-fellow.sh"
 
 KEEP_DEPLOYMENTS=3
+# A sweep keeps reading skills and scripts from the deployment it started on until
+# it exits. The lock records the runner PID; its command line names that deployment.
+ACTIVE_DEPLOY=""
+for LOCK_PID_FILE in "$HOME/.good-fellow/.lock.pid" "$HOME/.good-fellow/.lock.d/pid"; do
+  LOCK_PID=$(cat "$LOCK_PID_FILE" 2>/dev/null) || continue
+  kill -0 "$LOCK_PID" 2>/dev/null || continue
+  ACTIVE_DEPLOY=$(ps -o args= -p "$LOCK_PID" 2>/dev/null |
+    grep -o "$HOME/.good-fellow/deploy-[^/ ]*" | head -n 1) || ACTIVE_DEPLOY=""
+  break
+done
 OLD_DEPLOYS=( "$HOME/.good-fellow"/deploy-* )
 remove_count=$((${#OLD_DEPLOYS[@]} - KEEP_DEPLOYMENTS))
 remove_index=0
@@ -563,8 +575,9 @@ while [ "$remove_index" -lt "$remove_count" ]; do
   remove_index=$((remove_index + 1))
   # Glob order is lexicographic, not chronological: a stepped-back clock or a
   # same-second redeploy can sort the live deployment first. Never delete the
-  # deployment just published or the one the pointer names.
+  # deployment just published, the one the pointer names, or the one a sweep runs.
   [ "$OLD_DEPLOY" != "${DEPLOY_DIR:-}" ] || continue
+  [ "$OLD_DEPLOY" != "$ACTIVE_DEPLOY" ] || continue
   [ "$OLD_DEPLOY" != "$(cat "$HOME/.good-fellow/deployment-current" 2>/dev/null)" ] || continue
   if [ -d "$OLD_DEPLOY" ] && [ ! -L "$OLD_DEPLOY" ]; then
     case "$OLD_DEPLOY" in
