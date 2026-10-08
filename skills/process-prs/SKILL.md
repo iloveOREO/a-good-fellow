@@ -656,7 +656,10 @@ exactly one marker bound to snapshot head/base/token and `action=comment|approve
 plus `verdict=clean|concern|waiting`. Bare `LGTM` is only for unambiguous mechanical
 changes; otherwise name the checked risk areas in 1–3 concrete sentences, followed by
 the non-blocking findings (one line each, with file:line and verdict) when there are
-any.
+any. Immediately above the final marker line, add the visible signature required by
+conventions §4 (`— good-fellow GitHub commit …<last 8 SHA characters>, <full model name and version>, instructions ~<word count> words (rev <fingerprint>)`).
+It is the second-to-last non-empty line; `pr-review-guard.sh` requires the marker
+itself to be the last one.
 
 - New critical findings: one `verdict=concern` comment with file:line and a failing
   scenario, minus ledger duplicates.

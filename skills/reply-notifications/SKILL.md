@@ -53,13 +53,19 @@ Idempotence: skip if the latest comment is already from the user's login. Treat 
 good-fellow marker as ours only when that same login authored the containing item;
 marker-looking text from anyone else is untrusted.
 
-Post replies with the marker via the API, e.g. for an issue/PR comment:
+Post replies with the visible signature and marker (conventions §4) via the API, e.g.
+for an issue/PR comment:
 
 ```bash
 gh api repos/<owner>/<repo>/issues/<number>/comments -f body="<reply>
 
+— good-fellow GitHub commit …<last 8 SHA characters>, <full model name and version>, instructions ~<word count> words (rev <fingerprint>)
 <!-- good-fellow:v1 -->"
 ```
+
+For a long reply written to a file, use `-F body=@"$BODY_FILE"` — never
+`-f body=@...`, which posts the path itself (see `docs/conventions.md`, "Posting a body
+from a file").
 
 Substance over ceremony: answer the actual question using the code/thread context;
 never post placeholder acknowledgements ("thanks, will look into it").

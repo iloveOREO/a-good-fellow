@@ -79,9 +79,11 @@ For each issue, stop early if any of:
   alone is not coverage. If no open closing PR explains it, follow the declined-item
   rule below instead of silently skipping;
 - the issue is a question/discussion rather than an actionable code change — reply
-  with the answer instead (marker appended), then record `answered` only on success;
-- the issue is too ambiguous to act on safely: post one clarifying comment (marker),
-  record `clarified` only on success, and leave it for the user.
+  with the answer instead (signature and marker appended, conventions §4), then
+  record `answered` only on success;
+- the issue is too ambiguous to act on safely: post one clarifying comment (signature
+  and marker, conventions §4), record `clarified` only on success, and leave it for
+  the user.
 
 If idempotence finds an authenticated-user answer or clarification that still covers
 the latest issue state, record the matching outcome instead of posting a duplicate.
@@ -103,7 +105,7 @@ The `declined` comment must:
   result, including verified facts, risks, or failed checks that informed it;
 - state what condition, evidence, or next step would make further work possible when
   known; and
-- append the good-fellow marker.
+- append the visible signature and the good-fellow marker (conventions §4).
 
 This applies to every non-completion cause, including safety or security risk,
 insufficient validation conditions, failed tests, unsupported or out-of-scope work,
@@ -123,7 +125,8 @@ later sweep retry. An untouched queue tail that was never selected is not a decl
 item and receives no bulk comment.
 
 Capture the confirmed comment's numeric id — from the API response when posting
-(`gh api ... comments -f body=... --jq .id`), or from the reused existing comment when
+(`gh api ... comments -f body="<text>" --jq .id`, or `-F body=@"$BODY_FILE"` for a
+file — never `-f body=@...`), or from the reused existing comment when
 idempotence found one — as `DECLINE_COMMENT_ID`. Step 7 persists it with the receipt so
 cleanup can independently re-fetch and re-verify that exact comment, instead of relying
 only on the aggregate subject digest matching.
@@ -196,7 +199,8 @@ working tree (conventions §3).
 
 Invoke the **create-pr** skill on the worktree (it reviews the diff, commits, replays
 the branch onto the current base tip, pushes, and opens the PR with `Fixes #<n>` and the
-marker). Then comment on the issue linking the PR, with the marker. If create-pr
+signature and marker). Then comment on the issue linking the PR, with the signature
+and marker (conventions §4). If create-pr
 abandons the run on a base conflict it cannot resolve mechanically, nothing was pushed
 and there is no PR to link: leave the issue for the next sweep, keep any stage entry
 in place (do not `clear` it), record no receipt, and report the conflicting paths. On
