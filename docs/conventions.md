@@ -135,7 +135,10 @@ git -C <worktree> push origin HEAD:refs/heads/<headRefName>
 
 Branch naming: `good-fellow/issue-<n>` for issue fixes, `good-fellow/<short-slug>`
 otherwise. Never commit to a branch you did not create, except pushing fixes to the
-head branch of the **user's own** PR.
+head branch of the **user's own** PR — and never when that head is a shared integration
+branch (default branch, `dev`/`develop`, `main`/`master`, `release/*`, or one the gist
+names, as in a `dev → main` PR). Those fixes go on a new branch cut from the latest
+head branch and ship as a PR into it (`process-prs` §2A).
 
 ## 4. Bot marker
 
