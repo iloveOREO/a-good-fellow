@@ -137,6 +137,11 @@ if [ "${1:-}" = api ] && [ "${2:-}" = graphql ]; then
   exit 0
 fi
 
+if [ "${1:-}" = api ] && [ "${2:-}" = repos/owner/repo/pulls/1 ]; then
+  printf '1\topen\towner/repo\thttps://api.github.com/repos/owner/repo/pulls/1\tauthor\thttps://github.com/owner/repo/pull/1\tfalse\n'
+  exit 0
+fi
+
 if [ "${1:-}" = api ]; then
   printf '%s\n' "$*" >> "$STUB_POST_LOG"
   exit 0
@@ -267,6 +272,51 @@ printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
   "$migrate_token" reviewed "$legacy_size" "$legacy_payload" > "$migrate_file"
 migrate_phase=$(GOOD_FELLOW_STATE_DIR="$migrate_state" "$HANDOFF" match owner repo 1 "$legacy_snapshot")
 assert_eq "$migrate_phase" reviewed-migrate
+
+# Missing validation prerequisites park incomplete evidence without monopolizing
+# forced priority. The real helpers preserve it in the search-independent inventory,
+# rotate past it, reject successful coverage, and resume after prerequisites recover.
+blocked_state="$TEMP_ROOT/blocked-state"
+blocked_payload="$TEMP_ROOT/blocked.payload"
+printf '%s' '{"tests":{"pending":["App regression"],"blocker":"node unavailable"}}' > "$blocked_payload"
+GOOD_FELLOW_STATE_DIR="$blocked_state" "$HANDOFF" save owner repo 1 \
+  "$legacy_snapshot" blocked "$blocked_payload"
+assert_eq "$(GOOD_FELLOW_STATE_DIR="$blocked_state" "$HANDOFF" match owner repo 1 "$legacy_snapshot")" blocked
+GOOD_FELLOW_STATE_DIR="$blocked_state" "$HANDOFF" payload owner repo 1 > "$TEMP_ROOT/blocked-roundtrip"
+cmp -s "$blocked_payload" "$TEMP_ROOT/blocked-roundtrip" || fail 'blocked evidence changed'
+assert_eq "$(GOOD_FELLOW_STATE_DIR="$blocked_state" "$HANDOFF" reviewing-key)" ''
+blocked_rows=$(GOOD_FELLOW_STATE_DIR="$blocked_state" "$HANDOFF" queue-rows)
+assert_eq "$blocked_rows" $'https://api.github.com/repos/owner/repo\t1\tauthor\thttps://github.com/owner/repo/pull/1\tfalse'
+printf '%s\n%s\n' "$blocked_rows" \
+  $'https://api.github.com/repos/owner/repo\t2\tauthor\thttps://github.com/owner/repo/pull/2\tfalse' \
+  > "$TEMP_ROOT/blocked-inventory"
+GOOD_FELLOW_STATE_DIR="$blocked_state" "$QUEUE" advance https://api.github.com/repos/owner/repo 1
+blocked_order=$(GOOD_FELLOW_STATE_DIR="$blocked_state" "$QUEUE" order "$TEMP_ROOT/blocked-inventory")
+assert_eq "$(printf '%s\n' "$blocked_order" | head -1 | cut -f2)" 2
+assert_eq "$(printf '%s\n' "$blocked_order" | tail -1 | cut -f2)" 1
+set +e
+GOOD_FELLOW_STATE_DIR="$blocked_state" "$RECEIPTS" record pr https://api.github.com/repos/owner/repo 1 1 \
+  2026-08-19T00:00:00Z - blocked - "$proof" > "$TEMP_ROOT/blocked-receipt.out" 2> "$TEMP_ROOT/blocked-receipt.err"
+blocked_receipt_status=$?
+set -e
+assert_eq "$blocked_receipt_status" 64
+grep -F 'invalid covered outcome' "$TEMP_ROOT/blocked-receipt.err" >/dev/null || fail 'blocked receipt failed for wrong reason'
+# Recovery restores serial ownership while retaining the same pending evidence.
+GOOD_FELLOW_STATE_DIR="$blocked_state" "$HANDOFF" save owner repo 1 \
+  "$legacy_snapshot" reviewing "$blocked_payload"
+assert_eq "$(GOOD_FELLOW_STATE_DIR="$blocked_state" "$HANDOFF" reviewing-key)" $'https://api.github.com/repos/owner/repo\t1'
+GOOD_FELLOW_STATE_DIR="$blocked_state" "$HANDOFF" payload owner repo 1 > "$TEMP_ROOT/recovered-roundtrip"
+cmp -s "$blocked_payload" "$TEMP_ROOT/recovered-roundtrip" || fail 'recovery lost partial evidence'
+# A changed HEAD remains stale, including for parked evidence.
+blocked_file="$blocked_state/process-prs-handoff-5-owner-4-repo-1.state"
+printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' \
+  good-fellow-pr-handoff-v1 owner repo 1 cccccccccccccccccccccccccccccccccccccccc "$legacy_base" \
+  "$legacy_token" blocked "$legacy_size" "$legacy_payload" > "$blocked_file"
+set +e
+GOOD_FELLOW_STATE_DIR="$blocked_state" "$HANDOFF" match owner repo 1 "$legacy_snapshot" > "$TEMP_ROOT/blocked-stale.out"
+blocked_stale_status=$?
+set -e
+assert_eq "$blocked_stale_status" 3
 
 # A conversation item posted between snapshot and submission must be named in
 # the exit-3 diagnostics, so a restart cannot attribute the token change to a HEAD

@@ -49,7 +49,7 @@ validate_token() {
 }
 
 validate_phase() {
-  case "$1" in reviewing|reviewed) ;; *) die 'phase must be reviewing or reviewed' ;; esac
+  case "$1" in reviewing|reviewed|blocked) ;; *) die 'phase must be reviewing, reviewed, or blocked' ;; esac
 }
 
 ensure_state_dir() {

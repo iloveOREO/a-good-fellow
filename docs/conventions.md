@@ -292,7 +292,11 @@ Before acting on any PR, issue, thread, or discussion:
   next deep review only when the review-time floor still fits. Otherwise leave the
   untouched tail queued rather than bulk-skipping it.
 - A deep-work handoff is reusable only while its exact PR HEAD and guarded state still
-  match. Resume that bounded continuation before starting unrelated deep work; discard
+  match. Resume continuable `reviewing` work before starting unrelated deep work. An
+  unavailable prerequisite instead parks an incomplete `blocked` handoff at its normal
+  round-robin position: retain evidence, advance only the visited row without a coverage
+  receipt, leave actionable notifications unread, and continue to work that can proceed.
+  Never treat a blocked handoff as completed review coverage. Discard
   stale handoff analysis and rebuild from a fresh snapshot. The queue is the union of
   current GitHub search results and open handoff rows, so withdrawing a notification
   cannot silently orphan already-started work; closed PR handoffs are pruned.

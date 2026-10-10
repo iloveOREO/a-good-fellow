@@ -180,13 +180,17 @@ it. Report the effective review floor from `~/.good-fellow/env` or the version-r
 default.
 
 Use `show`; never parse handoff internals. At most one `reviewing` handoff may exist,
-because partial work holds the cursor and must resume before later deep work; if two
-appear, `reviewing-key` self-heals by keeping the newest and deleting the rest, so a
-persisting pair means the deployed runtime predates that fix. A `reviewing` handoff
+because continuable partial work holds the cursor and must resume before later deep
+work; if two appear, `reviewing-key` self-heals by keeping the newest and deleting
+the rest, so a persisting pair means the deployed runtime predates that fix. A `reviewing` handoff
 plus an unchanged cursor across several sufficiently long successful ticks means work
-is stuck. For `reviewed` handoffs there is exactly one staleness rule: a `reviewed`
-handoff is healthy while a guarded outcome has not yet been safely attempted or
-confirmed, and stale once its PR's gates have settled or its queue row recurred
+is stuck. Missing tools/services must instead be a `blocked` handoff, which keeps
+incomplete evidence and a queue row without forcing priority or counting as coverage.
+Report its prerequisite/probe/recovery action and whether later rows are moving;
+repeated early exits on the same unavailable prerequisite with a `reviewing` handoff
+are a scheduling defect, even when logs end in status 0. For `reviewed` handoffs there
+is exactly one staleness rule: a `reviewed` handoff is healthy while a guarded outcome
+has not yet been safely attempted or confirmed, and stale once its PR's gates have settled or its queue row recurred
 without a confirmed outcome/clear — a completed clean review awaiting CI or
 mergeability should instead show a visible gate-waiting marker and no retained
 handoff. A valid open handoff must appear in `queue-rows` even if GitHub search no
