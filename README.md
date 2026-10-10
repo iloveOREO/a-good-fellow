@@ -183,6 +183,9 @@ the runner auto-detects claude → codex → cursor-agent at each tick, and
 If an agent exits unsuccessfully, the runner tries the remaining available agents
 regardless of the error, until one succeeds or the shared time budget runs out.
 Each agent is attempted at most once per tick.
+Upgrade note: `GOOD_FELLOW_AGENT` used to be an exclusive pin; it is now only the
+first preference, so a machine that set it to keep other installed CLIs from running
+will now see them run as fallbacks when the preferred agent fails.
 
 Already set up this machine and just want the latest changes? See
 [Upgrading an already-onboarded machine](#upgrading-an-already-onboarded-machine)
