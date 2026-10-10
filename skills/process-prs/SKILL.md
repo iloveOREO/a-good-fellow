@@ -206,24 +206,39 @@ code: fix real issues, or reply with a concrete explanation; only then resolve i
 
 ### Fixes that cannot land on the head branch
 
-When `headRefName` is a branch the gist forbids pushing to (`dev`, `main`, or another
-it names) — a release PR such as `dev → main` — a confirmed defect is still fixed this
-run, not answered with "needs a separate PR". Only where the fix goes changes:
+A PR whose head is a shared integration branch — a release/promotion PR such as
+`dev → main` — is never pushed to, whatever the gist says: that branch only takes
+changes through reviewed PRs. It applies when the snapshot's `headRefName` is the
+repository default branch, `dev`, `develop`, `main`, `master`, a `release/*` branch,
+or another branch the gist names. Every fix this section would otherwise push — a
+review comment to address, a bug found while checking feedback, a diff-caused CI
+failure — is still made this run, not answered with "needs a separate PR". Only where
+it goes changes: a new branch from the latest head branch, shipped as a PR into it.
 
-1. Look for an existing fix first: an open PR of ours against `$HEAD` whose body links
-   this thread (`gh pr list --base "$HEAD" --author @me --search "<thread url> in:body"`).
-   Found → reply with its link if the thread lacks one and finalize `commented`; if it
-   has merged and the fetched `$HEAD` tip contains it, resolve the thread instead.
-2. Otherwise cut `good-fellow/<short-slug>` from the fetched `refs/good-fellow/pr-<N>`
-   tip (the defect lives in the code the release PR ships), implement the whole fix and
-   run the repository's checks for the touched paths.
-3. Ship it with `create-pr`, base overridden to `$HEAD` (its §4); the PR body links the
-   thread so step 1 finds it next tick.
-4. Reply on the thread with the PR URL and one sentence, leave the thread unresolved
-   until that PR merges into `$HEAD`, finalize `commented`.
+```bash
+HEAD_BRANCH=$(jq -r '.pullRequest.headRefName' "$PR_STATE")   # validated data, not PR text
+git -C ~/<repo> fetch origin "$HEAD_BRANCH:refs/good-fellow/base/$HEAD_BRANCH" --force
+```
 
-Nothing pushes to `$HEAD`. Failures and the time floor follow this section's normal
-rules: publish nothing, leave the row unadvanced, name the reason in the report.
+1. Look for an existing fix first: an open PR of ours against `$HEAD_BRANCH` whose
+   body links the item (the thread URL, or the release PR URL for a CI failure):
+   `gh pr list --base "$HEAD_BRANCH" --author @me --search "<url> in:body"`.
+   Found → reply with its link if the item lacks one and finalize `commented`; if it
+   has merged and the fetched tip contains it, resolve the thread instead.
+2. Otherwise add a worktree on a new `good-fellow/<short-slug>` branch cut from the
+   freshly fetched `refs/good-fellow/base/$HEAD_BRANCH` — the latest head branch, not
+   the release PR's snapshot, which may already be behind it. Confirm the defect still
+   exists there; if a newer commit already fixed it, reply with that SHA instead.
+   Implement the whole fix and run the repository's checks for the touched paths.
+3. Ship it with `create-pr`, base overridden to `$HEAD_BRANCH` (its §4); the PR body
+   links the item so step 1 finds it next tick.
+4. Reply on the thread (or, for CI, on the release PR) with the PR URL and one
+   sentence, leave the thread unresolved until that PR merges into `$HEAD_BRANCH`,
+   finalize `commented`. The release PR picks the fix up once it merges.
+
+Nothing pushes to `$HEAD_BRANCH`, and the detached-worktree push below never runs for
+such a PR. Failures and the time floor follow this section's normal rules: publish
+nothing, leave the row unadvanced, name the reason in the report.
 
 "Nothing awaiting a reply" needs a rule for comments that @-mention a third party —
 another reviewer, `@copilot`, any bot. Such a comment still makes the latest feedback
@@ -242,7 +257,8 @@ Before either deep path, apply §1's time floor, fetch `pull/<N>/head` to a priv
 and use a detached worktree. Require checked-out HEAD to equal snapshot HEAD before any
 edit/test; on mismatch clear any handoff, clean up, recapture, and restart this PR
 without advancing. Handle all CI and feedback together, test, commit, and plain-push
-once—never force, rebase, or retry a stale decision.
+once—never force, rebase, or retry a stale decision. When the head is a shared
+integration branch, the fix goes through the separate PR above instead of this push.
 
 **create-pr's base-sync step does not apply here.** That step exists because a branch
 about to become a *new* PR must not open behind its base. This branch is already the
