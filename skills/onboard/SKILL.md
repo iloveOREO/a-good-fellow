@@ -437,6 +437,10 @@ cutoff near the hard deadline; it is reserved cleanup, not new owner work.
 Process PRs one at a time. Before each next deep PR item, use the review-time floor:
 continue when enough time remains, otherwise stop without bulk-skipping the queue tail.
 Respect the persistent queue and resume only a valid HEAD/state-bound handoff.
+If a required runtime/service is unavailable, follow process-prs' blocked-handoff
+path: retain incomplete evidence, rotate the visited row without a coverage receipt,
+and continue to the next row while time permits. Do not end the PR sweep early merely
+because this item needs an unavailable prerequisite.
 
 No user is present: never wait for input, prefer skipping over guessing, and finish
 with one consolidated report of everything done and skipped."
