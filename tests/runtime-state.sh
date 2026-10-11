@@ -431,9 +431,9 @@ chmod +x "$runner" "$runner_home/.local/bin/gh" "$runner_home/.local/bin/claude"
 runner_output=$(HOME="$runner_home" CLAUDE_CODE_OAUTH_TOKEN=test \
   GOOD_FELLOW_DRY_RUN=1 GOOD_FELLOW_MAX_RUNTIME=1800 \
   GOOD_FELLOW_MIN_REVIEW_SECONDS=1800 "$runner" 2>&1)
-printf '%s\n' "$runner_output" | grep -F 'clamping to 1799' >/dev/null ||
+printf '%s\n' "$runner_output" | grep -F 'clamping to 1199' >/dev/null ||
   fail 'legacy max runtime was not clamped'
-printf '%s\n' "$runner_output" | grep -F 'clamping to 1679' >/dev/null ||
+printf '%s\n' "$runner_output" | grep -F 'clamping to 1079' >/dev/null ||
   fail 'oversized review floor was not clamped'
 printf '%s\n' "$runner_output" | grep -Fx 'good-fellow dry run ok.' >/dev/null ||
   fail 'clamped runner did not reach the dry-run sentinel'

@@ -1,6 +1,6 @@
 ---
 name: onboard
-description: Set up or upgrade the good-fellow GitHub automation. Installs the skills for every agent on the machine, checks gh login, derives and creates the user's personal instruction gist when missing, verifies headless agent auth, publishes the runner, and installs a 30-minute cron job with low-cost periodic source/gist synchronization. Use when the user says onboard, /onboard, set up good-fellow, initialize the GitHub agent, or upgrade an existing installation.
+description: Set up or upgrade the good-fellow GitHub automation. Installs the skills for every agent on the machine, checks gh login, derives and creates the user's personal instruction gist when missing, verifies headless agent auth, publishes the runner, and installs a cron job that runs three times an hour with low-cost periodic source/gist synchronization. Use when the user says onboard, /onboard, set up good-fellow, initialize the GitHub agent, or upgrade an existing installation.
 ---
 
 # Onboard
@@ -34,7 +34,7 @@ that entirely:
   |---|---|
   | `~/.good-fellow/` | state: instruction cache, logs, worktrees, generated runner |
   | `~/.claude/skills/`, `~/.codex/skills/`, `~/.cursor/skills/` | skill symlinks (only for agents that exist) |
-  | the user's crontab | the 30-minute schedule |
+  | the user's crontab | the schedule (minutes 7, 27, and 47 each hour) |
 
   Mention that they can pre-authorize instead of approving each step — in Claude
   Code, starting the session with `claude --add-dir ~/.good-fellow` (after Step 0
@@ -229,10 +229,11 @@ Requirements the generated script must satisfy:
   with nobody present to approve them and the run fails silently.
 - **Claude invocation**: do NOT use `--dangerously-skip-permissions` (claude refuses
   it when running as root); pre-authorize tools with `--allowedTools` instead.
-- **Timeout**: default 1500s so a run always ends before the next 30-minute tick.
+- **Timeout**: default 1080s so a run always ends before the next 20-minute tick.
   Preserve older `1800`-second configurations by clamping any value at or above the
-  cadence to 1799 with a warning instead of bricking every scheduled run. Clamp an
-  oversized review floor to the resulting cleanup-safe maximum for the same reason.
+  1200-second cadence to 1199 with a warning instead of bricking every scheduled run.
+  Clamp an oversized review floor to the resulting cleanup-safe maximum for the same
+  reason.
 - **Review priority and deadline**: run `process-prs` first, then the other owner
   sweeps, and run `reply-notifications` last so it can consume their receipts and
   clear only work they actually covered. Export absolute run and stop epochs, and
@@ -314,14 +315,14 @@ REPO_DIR="$DEPLOY_DIR/runtime"
 SOURCE_REPO="<REPO_ROOT>"
 [ -d "$REPO_DIR/skills" ] && [ -d "$REPO_DIR/docs" ] || { printf 'incomplete good-fellow deployment; run onboard\n' >&2; exit 66; }
 [ -f "$STATE_DIR/env" ] && { set -a; . "$STATE_DIR/env"; set +a; }
-MAX_RUNTIME="${GOOD_FELLOW_MAX_RUNTIME:-1500}"
+MAX_RUNTIME="${GOOD_FELLOW_MAX_RUNTIME:-1080}"
 GOOD_FELLOW_MIN_REVIEW_SECONDS="${GOOD_FELLOW_MIN_REVIEW_SECONDS:-480}"
 case "$MAX_RUNTIME" in ''|0[0-9]*|*[!0-9]*) printf 'invalid GOOD_FELLOW_MAX_RUNTIME\n' >&2; exit 64 ;; esac
 case "$GOOD_FELLOW_MIN_REVIEW_SECONDS" in ''|0[0-9]*|*[!0-9]*) printf 'invalid GOOD_FELLOW_MIN_REVIEW_SECONDS\n' >&2; exit 64 ;; esac
 [ "$MAX_RUNTIME" -gt 180 ] || { printf 'GOOD_FELLOW_MAX_RUNTIME must be at least 181 seconds\n' >&2; exit 64; }
-if [ "$MAX_RUNTIME" -ge 1800 ]; then
-  printf 'GOOD_FELLOW_MAX_RUNTIME=%s reaches/exceeds the 30-minute cadence; clamping to 1799\n' "$MAX_RUNTIME" >&2
-  MAX_RUNTIME=1799
+if [ "$MAX_RUNTIME" -ge 1200 ]; then
+  printf 'GOOD_FELLOW_MAX_RUNTIME=%s reaches/exceeds the 20-minute cadence; clamping to 1199\n' "$MAX_RUNTIME" >&2
+  MAX_RUNTIME=1199
 fi
 [ "$GOOD_FELLOW_MIN_REVIEW_SECONDS" -ge 60 ] || { printf 'GOOD_FELLOW_MIN_REVIEW_SECONDS must be at least 60 seconds\n' >&2; exit 64; }
 MAX_REVIEW_FLOOR=$((MAX_RUNTIME - 120))
@@ -590,20 +591,22 @@ Verify the launcher, pointer, and selected version runner before relying on them
 ~/.good-fellow/deployment-current`, and `bash -n
 "$(cat ~/.good-fellow/deployment-current)/run-good-fellow.sh"`.
 
-## Step 6 — Scheduled job (every 30 minutes)
+## Step 6 — Scheduled job (three times an hour)
 
-Use cron — it works on both Linux and macOS. Install idempotently: check
-`crontab -l` for `run-good-fellow.sh` first; if present, report and skip.
+Use cron — it works on both Linux and macOS. Check `crontab -l` for
+`run-good-fellow.sh`. If a good-fellow entry already exists, update only its schedule
+to the current one below, preserving its command and every unrelated crontab entry;
+if it already matches, report and skip. If no entry exists, append the new one.
 
-Otherwise append, preserving existing entries and headers, with all paths under the
+When adding an entry, preserve existing entries and headers, with all paths under the
 **current user's home** (run `echo $HOME` — never assume a username):
 
 ```
-7,37 * * * * $HOME/.good-fellow/run-good-fellow.sh >> $HOME/.good-fellow/logs/cron-$(date +\%Y\%m\%d-\%H\%M).log 2>&1
+7,27,47 * * * * $HOME/.good-fellow/run-good-fellow.sh >> $HOME/.good-fellow/logs/cron-$(date +\%Y\%m\%d-\%H\%M).log 2>&1
 ```
 
 (Write `$HOME` out as its literal value — cron does not reliably expand variables in
-the command field on all systems.) Use minutes 7 and 37, off the hour, to avoid the
+the command field on all systems.) Use minutes 7, 27, and 47, off the hour, to avoid the
 top-of-hour cron rush and other jobs on the machine. If the crontab lacks
 `SHELL`/`PATH`/`HOME` headers entirely, add them using this machine's actual values
 (`echo $PATH`, `echo $HOME`) so `gh` and the agent CLI resolve — on macOS that must
@@ -615,7 +618,7 @@ half-written (`crontab -` replaces the whole table, so always start from the cur
 one):
 
 ```bash
-{ crontab -l 2>/dev/null; echo '7,37 * * * * <expanded command line>'; } | crontab -
+{ crontab -l 2>/dev/null; echo '7,27,47 * * * * <expanded command line>'; } | crontab -
 ```
 
 Verify with `crontab -l` after writing.
