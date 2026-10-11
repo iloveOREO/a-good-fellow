@@ -3,13 +3,13 @@
 Agent-agnostic skills that discuss, review, and fix GitHub PRs and issues on your
 behalf. The skills are plain [SKILL.md](https://agentskills.io) folders, so they work
 in Claude Code, Codex, Cursor, and any agent that reads the same format; a cron job
-runs them headlessly every 30 minutes.
+runs them headlessly three times an hour.
 
 Works for any user on macOS and Linux: no hardcoded usernames or paths (everything
 lives under your `$HOME`), and the scripts run on stock macOS bash 3.2 / BSD userland
 as well as GNU/Linux.
 
-## What it does, every 30 minutes
+## What it does, every 20 minutes
 
 1. **process-prs** — walks every open PR involving you before notification backlog can
    consume the run's time or context:
@@ -34,7 +34,7 @@ Your standing preferences (language, tone, review taste, repo scope) live in a
 personal gist file `good-fellow-instruction.md`, cached at
 `~/.good-fellow/instruction.md` and applied to every task. A shell preflight checks
 the gist and this repository every 48 hours by default, outside model context; the
-30-minute sweeps therefore spend no tokens polling for updates.
+scheduled sweeps therefore spend no tokens polling for updates.
 
 ## The skills
 
@@ -167,7 +167,7 @@ about any other agent you use and it will install there too.
 - materializes a versioned deployment (runtime + matching version runner) under
   `~/.good-fellow/` so a sweep cannot observe a source checkout while it is edited;
 - atomically updates `deployment-current` and the stable launcher at
-  `~/.good-fellow/run-good-fellow.sh`, then installs the 30-minute cron job (on macOS,
+  `~/.good-fellow/run-good-fellow.sh`, then installs the 20-minute cron job (on macOS,
   cron may need Full Disk Access for scheduled runs).
 - installs a deterministic maintenance preflight that stays offline between checks,
   then every 48 hours compares the instruction gist and source upstream without model
@@ -217,8 +217,8 @@ upgrade path. On a machine that is already onboarded the slash command works:
 (If the session predates the install and does not recognize it, restart the agent, or
 ask it to "run the onboard skill in skills/onboard/SKILL.md".) It refreshes the
 symlinks (adding any new skills), materializes a fresh deployment, atomically updates
-the pointer/launcher, leaves an existing crontab entry alone, and re-runs the smoke
-test.
+the pointer/launcher, updates the good-fellow crontab entry to the current schedule
+while preserving other entries, and re-runs the smoke test.
 Then **restart the agent session** so newly added skills appear as slash commands.
 
 Two notes: scheduled synchronization never changes your checkout and preserves a
@@ -250,7 +250,7 @@ this repo.
   into shell commands (PRs are addressed by number).
 - **Idempotent**: a marker authored by the authenticated user prevents duplicate
   replies and re-reviews; copied marker text from other participants is never trusted.
-- **Bounded**: single-instance lock plus a 25-minute timeout per run; never
+- **Bounded**: single-instance lock plus an 18-minute timeout per run; never
   force-pushes, closes, or merges anything; the only PR-state mutation is approving a
   clean PR you were asked to review.
 
