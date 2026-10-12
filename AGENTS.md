@@ -27,9 +27,10 @@ Skills (each in `skills/<name>/SKILL.md`):
 - `fix-assigned-issues` — fix assigned issues and open PRs.
 - `create-pr` — commit, sync onto the current base, push, and open a PR from a
   working tree with changes.
-- `process-prs` — fix feedback on the user's PRs (a confirmed defect on a release PR
-  whose head is `dev`/`main` is fixed on its own branch and shipped as a separate PR
-  against that head via `create-pr`, never pushed to the head directly); review others' PRs (critical
+- `process-prs` — fix feedback on the user's PRs (any fix — a comment to address, a
+  bug, a CI failure — on a release PR whose head is a shared branch such as `dev` is
+  made on a new branch cut from the latest `dev` and shipped as a separate PR into
+  `dev` via `create-pr`, never pushed to the head directly); review others' PRs (critical
   issues when found; otherwise a concise, concrete rationale, with bare `LGTM` only
   for extremely simple changes; fail closed on incomplete evidence or stale state,
   approve only when clean and review was requested, leave a visible HEAD-bound

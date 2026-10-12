@@ -12,8 +12,8 @@ ships them as a PR. Read `docs/conventions.md` (repo root of this skill) and
 Inputs: the working tree path (default: current directory), optionally the issue
 number the change fixes, and optionally an explicit base branch. Without one the PR
 targets the repository default branch; `process-prs` passes one when a fix belongs on
-a release PR's head branch (for example `dev`) that the gist forbids pushing to
-directly.
+a release PR's head branch (for example `dev` in a `dev → main` PR), which is never
+pushed to directly.
 
 ## 1. Pre-flight
 

@@ -1,6 +1,6 @@
 ---
 name: check-status
-description: Report the health of the good-fellow automation - whether a sweep is running right now, whether the 30-minute cron job is installed and firing, what the recent runs did, and why they failed or were skipped. Diagnoses stuck locks, expired credentials, timeouts, and blocked writes. Use when the user asks about cron job status, whether the bot is running, why nothing happened, or to check on the automation.
+description: Report the health of the good-fellow automation - whether a sweep is running right now, whether the cron job is installed and firing three times an hour, what the recent runs did, and why they failed or were skipped. Diagnoses stuck locks, expired credentials, timeouts, and blocked writes. Use when the user asks about cron job status, whether the bot is running, why nothing happened, or to check on the automation.
 ---
 
 # Check Status
@@ -33,7 +33,7 @@ ps -o pid,lstart,etime,cmd -p "$(cat ~/.good-fellow/.lock.pid 2>/dev/null)" 2>/d
   on the flock path (the lock died with the process); note it and move on.
 - On macOS the lock is a directory: check `~/.good-fellow/.lock.d/pid` instead.
 
-Compare the elapsed time against `MAX_RUNTIME` (1500s default). A run older than that
+Compare the elapsed time against `MAX_RUNTIME` (1080s default). A run older than that
 should have been killed by `timeout`; if it wasn't, `timeout`/`gtimeout` is missing on
 this machine and the runner is unbounded — worth flagging.
 
@@ -45,7 +45,7 @@ ls -lt ~/.good-fellow/logs/ | head -10
 ```
 
 Every tick writes a log, so the newest log timestamp tells you when cron last fired.
-Judge against the schedule (`7,37 * * * *` → at most ~30 minutes old):
+Judge against the schedule (`7,27,47 * * * *` → at most ~20 minutes old):
 
 - No crontab entry → onboarding never finished the schedule step. Suggest `/onboard`.
 - Entry present but no logs at all → cron is not executing the job. Usual causes: on
@@ -121,7 +121,7 @@ VERSION_RUNNER="$DEPLOY_DIR/run-good-fellow.sh"
 - **Repeated timeouts.** Consistently hitting the limit means the workload no longer
   fits in one tick. Suggest raising `GOOD_FELLOW_MAX_RUNTIME` in `~/.good-fellow/env`
   or narrowing scope in the instruction gist. Current runners clamp values at or above
-  the 30-minute cadence to 1799 seconds with a warning so an older `1800` setting does
+  the 20-minute cadence to 1199 seconds with a warning so an older `1800` setting does
   not brick the schedule.
 - **Credential expiry.** Claude OAuth refresh tokens expire roughly monthly; a run of
   `FATAL` lines starting on one date usually means a re-login is due
@@ -185,13 +185,17 @@ it. Report the effective review floor from `~/.good-fellow/env` or the version-r
 default.
 
 Use `show`; never parse handoff internals. At most one `reviewing` handoff may exist,
-because partial work holds the cursor and must resume before later deep work; if two
-appear, `reviewing-key` self-heals by keeping the newest and deleting the rest, so a
-persisting pair means the deployed runtime predates that fix. A `reviewing` handoff
+because continuable partial work holds the cursor and must resume before later deep
+work; if two appear, `reviewing-key` self-heals by keeping the newest and deleting
+the rest, so a persisting pair means the deployed runtime predates that fix. A `reviewing` handoff
 plus an unchanged cursor across several sufficiently long successful ticks means work
-is stuck. For `reviewed` handoffs there is exactly one staleness rule: a `reviewed`
-handoff is healthy while a guarded outcome has not yet been safely attempted or
-confirmed, and stale once its PR's gates have settled or its queue row recurred
+is stuck. Missing tools/services must instead be a `blocked` handoff, which keeps
+incomplete evidence and a queue row without forcing priority or counting as coverage.
+Report its prerequisite/probe/recovery action and whether later rows are moving;
+repeated early exits on the same unavailable prerequisite with a `reviewing` handoff
+are a scheduling defect, even when logs end in status 0. For `reviewed` handoffs there
+is exactly one staleness rule: a `reviewed` handoff is healthy while a guarded outcome
+has not yet been safely attempted or confirmed, and stale once its PR's gates have settled or its queue row recurred
 without a confirmed outcome/clear — a completed clean review awaiting CI or
 mergeability should instead show a visible gate-waiting marker and no retained
 handoff. A valid open handoff must appear in `queue-rows` even if GitHub search no

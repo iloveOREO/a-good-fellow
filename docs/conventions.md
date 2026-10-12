@@ -136,12 +136,15 @@ git -C <worktree> push origin HEAD:refs/heads/<headRefName>
 Branch naming: `good-fellow/issue-<n>` for issue fixes, `good-fellow/<short-slug>`
 otherwise. Never commit to a branch you did not create, except on the head branch of
 the **user's own** PR, where both a fix and a baseline merge of that PR's own base
-branch may be pushed. The baseline merge is allowed only as `process-prs` §2A scopes
-it — never on someone else's PR, never as a rebase or force-push, and never carrying a
-fix inside the merge commit. Such a merge always carries a
-`Good-Fellow-Baseline-Merge: <base-sha>` trailer; that trailer, not the commit's
-two-parent shape, is what later identifies the merge as ours, so a merge the author
-made by hand is never mistaken for one we pushed.
+branch may be pushed — and never when that head is a shared integration branch
+(default branch, `dev`/`develop`, `main`/`master`, `release/*`, or one the gist names,
+as in a `dev → main` PR). Those fixes go on a new branch cut from the latest head
+branch and ship as a PR into it (`process-prs` §2A). The baseline merge is allowed only
+as `process-prs` §2A scopes it — never on someone else's PR, never as a rebase or
+force-push, and never carrying a fix inside the merge commit. Such a merge always
+carries a `Good-Fellow-Baseline-Merge: <base-sha>` trailer; that trailer, not the
+commit's two-parent shape, is what later identifies the merge as ours, so a merge the
+author made by hand is never mistaken for one we pushed.
 
 ## 4. Bot marker
 
@@ -298,7 +301,11 @@ Before acting on any PR, issue, thread, or discussion:
   next deep review only when the review-time floor still fits. Otherwise leave the
   untouched tail queued rather than bulk-skipping it.
 - A deep-work handoff is reusable only while its exact PR HEAD and guarded state still
-  match. Resume that bounded continuation before starting unrelated deep work; discard
+  match. Resume continuable `reviewing` work before starting unrelated deep work. An
+  unavailable prerequisite instead parks an incomplete `blocked` handoff at its normal
+  round-robin position: retain evidence, advance only the visited row without a coverage
+  receipt, leave actionable notifications unread, and continue to work that can proceed.
+  Never treat a blocked handoff as completed review coverage. Discard
   stale handoff analysis and rebuild from a fresh snapshot. The queue is the union of
   current GitHub search results and open handoff rows, so withdrawing a notification
   cannot silently orphan already-started work; closed PR handoffs are pruned.
