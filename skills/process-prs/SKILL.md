@@ -431,6 +431,13 @@ of skipping the row or restarting from nothing each tick:
   A changed snapshot, a moved base the patch no longer applies to, or any apply
   failure clears the handoff and restarts the item fresh; never hand-merge a stale
   patch.
+- When "Baseline before fixes" merged a base this run, that merge is local and
+  unpushed, so a diff against the snapshot HEAD would carry the whole base. Record its
+  `BASE_SHA` in `evidence` and take the diff against the local merge commit instead.
+  On resume, fetch that exact `BASE_SHA`, redo the same baseline merge on the snapshot
+  HEAD, then apply the patch; a `BASE_SHA` that can no longer be fetched or merged
+  cleanly restarts the item fresh. The resumed run counts as the one baseline sync for
+  this PR.
 - Ship only when every item is handled and the touched paths' checks pass, then
   finalize as above and clear the handoff.
 
